@@ -32,7 +32,7 @@
 #define __SDS_H
 
 /*
- * 最大预分配长度
+ * 最大预分配长度：1M
  */
 #define SDS_MAX_PREALLOC (1024*1024)
 
@@ -40,12 +40,13 @@
 #include <stdarg.h>
 
 /*
- * 类型别名，用于指向 sdshdr 的 buf 属性
+ * 类型别名，用于指向 sdshdr 的 buf 属性，sds指向buf，这样获取sdshdr结构就是struct sdshdr* sh= (s-(sizeof(struct sdshdr))
+ 即向前走8字节
  */
 typedef char *sds;
 
 /*
- * 保存字符串对象的结构
+ * 保存字符串对象的结构，如果int占4字节的话，整个结构体占用8字节，buf是柔性数组，不占用字节
  */
 struct sdshdr {
     
@@ -61,7 +62,7 @@ struct sdshdr {
 
 /*
  * 返回 sds 实际保存的字符串的长度
- *
+ *将s向前挪8字节获取sdshdr结构体的地址，然后获得属性len
  * T = O(1)
  */
 static inline size_t sdslen(const sds s) {
@@ -71,7 +72,7 @@ static inline size_t sdslen(const sds s) {
 
 /*
  * 返回 sds 可用空间的长度
- *
+ * 将s向前挪8字节获取sdshdr结构体的地址，然后获得属性free
  * T = O(1)
  */
 static inline size_t sdsavail(const sds s) {
