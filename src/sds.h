@@ -42,6 +42,7 @@
 /*
  * 类型别名，用于指向 sdshdr 的 buf 属性，sds指向buf，这样获取sdshdr结构就是struct sdshdr* sh= (s-(sizeof(struct sdshdr))
  即向前走8字节
+ sds会代替sdshdr在各个函数间使用
  */
 typedef char *sds;
 
