@@ -946,10 +946,9 @@ void sdstoupper(sds s) {
 
 /*
  * 对比两个 sds ， 注意内部调用的是memcmp，是比较二进制数据，而不是仅仅是字符串
- memcmp(s1, s2, n)：比较s1和s2开始处的n个字符，必定比较n个字节除非某个字节处出现不相等
- strncmp(s1, s2, n)：比较s1和s2开始处的n个字符，如果还未比到n个字节出现某个字符是'\0'则停止比较，分出胜负了。
- 即memcmp在比较字节时，不管是不是'\0'；而strncmp在比较字节时，会判断如果遇到'\0'时则停止。
- 所以这个函数主要是把sds当作二进制数据来比较，而不是文本
+ 所以memcmp是把s1, s2当作二进制数据进行比较，如果没分出胜负那么必定比较count个字节
+而strncmp是把s1, s2当作字符串进行比较，如果没分出胜负但某个字符串到末尾了（遇到'\0'）那么提前结束，
+不一定会真正比较count个字符。而sdshdr是二进制数据，所以需要用memcmp来内部比较。
  * 返回值
  *  int ：相等返回 0 ，s1 较大返回正数， s2 较大返回负数
  *
@@ -961,7 +960,7 @@ void sdstoupper(sds s) {
  *
  *     1 if s1 > s2.
  *    -1 if s1 < s2.
- *     0 if s1 and s2 are exactly the same binary string.
+ *     0 if s1 and s2 are exactly the same binary string. //所以比较的是二进制数据
  *
  * If two strings share exactly the same prefix, but one of the two has
  * additional characters, the longer string is considered to be greater than
@@ -1009,52 +1008,61 @@ int sdscmp(const sds s1, const sds s2) {
  *
  * T = O(N^2)
  */
-sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count) {
+//这个函数返回一个数组，数组里每个元素都是sdshdr中的sds
+//这个函数比较复杂，会提前分配数组大小的思想！用一个示例来写实现比较方便。
+sds *sdssplitlen(const char *s, int len, const char *sep, int seplen, int *count) { //seplen表示sep的长度
     int elements = 0, slots = 5, start = 0, j;
     sds *tokens;
 
-    if (seplen < 1 || len < 0) return NULL;
+    if (seplen < 1 || len < 0) return NULL; //如果分隔符长度小于1或者字符长度小于0 那么不用分隔了直接返回NULL
 
-    tokens = zmalloc(sizeof(sds)*slots);
+    tokens = zmalloc(sizeof(sds)*slots); //分配数组，元素是5个
     if (tokens == NULL) return NULL;
 
+    //如果字符串为空，直接返回5个元素的数组!!!
     if (len == 0) {
         *count = 0;
         return tokens;
     }
     
-    // T = O(N^2)
+    // T = O(N^2) j<=len-seplen，这样能保证下面的memcmp(s+j, sep, seplen)里的参数s+j+seplen-1是合法的
+    //elements表示tokens里下个可用的元素
     for (j = 0; j < (len-(seplen-1)); j++) {
         /* make sure there is room for the next element and the final one */
+        //如果保证slots中的位置还够elements+2个，一个是为了下个匹配上的元素，一个留给最后一个元素
+        //如果进入了这个if里，说明slots=elements+1，就是elements走到最后一个元素了
         if (slots < elements+2) {
             sds *newtokens;
 
-            slots *= 2;
+            //如果不够了，那么重新分配数组，大小是slots的2倍
+            slots *= 2; 
             newtokens = zrealloc(tokens,sizeof(sds)*slots);
-            if (newtokens == NULL) goto cleanup;
+            if (newtokens == NULL) goto cleanup; //此时elements+1=slots
             tokens = newtokens;
         }
         /* search the separator */
-        // T = O(N)
+        // T = O(N) 如果找到了一个separator，注意这里判断了如果seplen=1那么分隔符就是一个字符不需要动用memcmp了。。。
         if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,seplen) == 0)) {
-            tokens[elements] = sdsnewlen(s+start,j-start);
+            //此时j指向下个match的separator的开始处，start指向开始的字符
+            tokens[elements] = sdsnewlen(s+start,j-start);//创建一个sdshdr，内容是
             if (tokens[elements] == NULL) goto cleanup;
-            elements++;
-            start = j+seplen;
+            elements++;//移动elements到下个元素位置
+            start = j+seplen; //separator的下个字符
             j = j+seplen-1; /* skip the separator */
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */
+    //将最后一个元素添加进来
     tokens[elements] = sdsnewlen(s+start,len-start);
     if (tokens[elements] == NULL) goto cleanup;
     elements++;
-    *count = elements;
+    *count = elements; //记录总的数目
     return tokens;
 
 cleanup:
     {
         int i;
-        for (i = 0; i < elements; i++) sdsfree(tokens[i]);
+        for (i = 0; i < elements; i++) sdsfree(tokens[i]); //这里是bug吧？应该是i < slots？？？
         zfree(tokens);
         *count = 0;
         return NULL;
@@ -1062,7 +1070,7 @@ cleanup:
 }
 
 /*
- * 释放 tokens 数组中 count 个 sds
+ * 释放 tokens 数组中 count 个 sds，先释放每个元素，然后释放整个数组
  *
  * T = O(N^2)
  */
@@ -1129,7 +1137,7 @@ int is_hex_digit(char c) {
 /* Helper function for sdssplitargs() that converts a hex digit into an
  * integer from 0 to 15 */
 /*
- * 将十六进制符号转换为 10 进制
+ * 将十六进制字符转换为 10 进制数字
  *
  * T = O(1)
  */
@@ -1197,6 +1205,7 @@ int hex_digit_to_int(char c) {
  *
  * T = O(N^2)
  */
+//基本上以状态机方式来解析参数？
 sds *sdssplitargs(const char *line, int *argc) {
     const char *p = line;
     char *current = NULL;
@@ -1318,8 +1327,7 @@ err:
  * characters specified in the 'from' string to the corresponding character
  * in the 'to' array.
  *
- * 将字符串 s 中，
- * 所有在 from 中出现的字符，替换成 to 中的字符
+ * 将字符串 s 中， 所有在 from 中出现的字符，替换成 to 中的相应字符
  *
  * For instance: sdsmapchars(mystring, "ho", "01", 2)
  * will have the effect of turning the string "hello" into "0ell1".
@@ -1334,10 +1342,12 @@ err:
  *
  * T = O(N^2)
  */
+ //对于s中出现的每个字符，如果这个字符在from中出现，那么替换为to中相应位置字符
 sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen) {
     size_t j, i, l = sdslen(s);
 
     // 遍历输入字符串
+    //对于s中出现的每个字符，如果这个字符在from中出现，那么替换为to中相应字符
     for (j = 0; j < l; j++) {
         // 遍历映射
         for (i = 0; i < setlen; i++) {
@@ -1353,13 +1363,14 @@ sds sdsmapchars(sds s, const char *from, const char *to, size_t setlen) {
 
 /* Join an array of C strings using the specified separator (also a C string).
  * Returns the result as an sds string. */
+//将argv中参数放入sdshdr的buf中，每个都以sep来分隔
 sds sdsjoin(char **argv, int argc, char *sep) {
     sds join = sdsempty();
     int j;
 
     for (j = 0; j < argc; j++) {
         join = sdscat(join, argv[j]);
-        if (j != argc-1) join = sdscat(join,sep);
+        if (j != argc-1) join = sdscat(join,sep); //如果不是最后一个字符串，那么添加分隔字符串
     }
     return join;
 }
