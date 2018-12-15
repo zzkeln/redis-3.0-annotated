@@ -945,8 +945,11 @@ void sdstoupper(sds s) {
 }
 
 /*
- * 对比两个 sds ， strcmp 的 sds 版本
- *
+ * 对比两个 sds ， 注意内部调用的是memcmp，是比较二进制数据，而不是仅仅是字符串
+ memcmp(s1, s2, n)：比较s1和s2开始处的n个字符，必定比较n个字节除非某个字节处出现不相等
+ strncmp(s1, s2, n)：比较s1和s2开始处的n个字符，如果还未比到n个字节出现某个字符是'\0'则停止比较，分出胜负了。
+ 即memcmp在比较字节时，不管是不是'\0'；而strncmp在比较字节时，会判断如果遇到'\0'时则停止。
+ 所以这个函数主要是把sds当作二进制数据来比较，而不是文本
  * 返回值
  *  int ：相等返回 0 ，s1 较大返回正数， s2 较大返回负数
  *
@@ -970,9 +973,9 @@ int sdscmp(const sds s1, const sds s2) {
     l1 = sdslen(s1);
     l2 = sdslen(s2);
     minlen = (l1 < l2) ? l1 : l2;
-    cmp = memcmp(s1,s2,minlen);
+    cmp = memcmp(s1,s2,minlen); //先比较相同大小的二进制内容，注意这里是strncmp
 
-    if (cmp == 0) return l1-l2;
+    if (cmp == 0) return l1-l2; //如果没有分出胜负，那么比较长度
 
     return cmp;
 }
