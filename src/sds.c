@@ -260,7 +260,6 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 
 /*
  * 回收free内存，调用realloc回收，len和buf都不会改变
- *
  * 返回值
  *  sds ：内存调整后的 sds
  *
@@ -289,9 +288,7 @@ sds sdsRemoveFreeSpace(sds s) {
     return sh->buf;
 }
 
-/*
- * 返回给定 sds 分配的内存字节数
- *
+/*返回sdshdr分配的内存大小，len+free+sizeof(struct sdshdr)+1('\0')
  * 复杂度
  *  T = O(1)
  */
@@ -345,6 +342,7 @@ size_t sdsAllocSize(sds s) {
  * 复杂度
  *  T = O(1)
  */
+//增加len,减少free，重新设置末尾的'\0'
 void sdsIncrLen(sds s, int incr) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
 
@@ -359,7 +357,7 @@ void sdsIncrLen(sds s, int incr) {
     // 因为前一个 assert 已经确保 sh->free - incr >= 0 了
     assert(sh->free >= 0);
 
-    // 放置新的结尾符号
+    // 放置新的结尾符号，这个不能漏
     s[sh->len] = '\0';
 }
 
@@ -369,9 +367,8 @@ void sdsIncrLen(sds s, int incr) {
  * if the specified length is smaller than the current length, no operation
  * is performed. */
 /*
- * 将 sds 扩充至指定长度，未使用的空间以 0 字节填充。
- *
- * 返回值
+ * 将sdhdr的内容扩充到len长度，如果len>sdshdr->len那么多出来的设置为0，如果小于啥都不用做
+ * 返回值。就是将sdshdr->len扩展到len大小，多余的用0填充
  *  sds ：扩充成功返回新 sds ，失败返回 NULL
  *
  * 复杂度：
@@ -381,11 +378,10 @@ sds sdsgrowzero(sds s, size_t len) {
     struct sdshdr *sh = (void*)(s-(sizeof(struct sdshdr)));
     size_t totlen, curlen = sh->len;
 
-    // 如果 len 比字符串的现有长度小，
-    // 那么直接返回，不做动作
+    // 如果 len 比字符串的现有长度小，那么直接返回，啥都不做
     if (len <= curlen) return s;
 
-    // 扩展 sds
+    // 扩展 sds，保证至少有len-curlen个多余的空间
     // T = O(N)
     s = sdsMakeRoomFor(s,len-curlen);
     // 如果内存不足，直接返回
@@ -394,12 +390,13 @@ sds sdsgrowzero(sds s, size_t len) {
     /* Make sure added region doesn't contain garbage */
     // 将新分配的空间用 0 填充，防止出现垃圾内容
     // T = O(N)
-    sh = (void*)(s-(sizeof(struct sdshdr)));
+    sh = (void*)(s-(sizeof(struct sdshdr))); //找到新结构体的起始地址
+    //将s+curlent开始的len-curlen+1个字节都设置为0，也包括末尾的'\0'一起设置了
     memset(s+curlen,0,(len-curlen+1)); /* also set trailing \0 byte */
 
     // 更新属性
-    totlen = sh->len+sh->free;
-    sh->len = len;
+    totlen = sh->len+sh->free; //总大小
+    sh->len = len; //更新len
     sh->free = totlen-sh->len;
 
     // 返回新的 sds
@@ -407,8 +404,7 @@ sds sdsgrowzero(sds s, size_t len) {
 }
 
 /*
- * 将长度为 len 的字符串 t 追加到 sds 的字符串末尾
- *
+ * 将长度为 len 的字符串 t 追加到 sds 的字符串末尾，由于s可能换块内存，所以参数sds s不再有效了，必须用返回值
  * 返回值
  *  sds ：追加成功返回新 sds ，失败返回 NULL
  *
@@ -427,14 +423,14 @@ sds sdscatlen(sds s, const void *t, size_t len) {
     // 原有字符串长度
     size_t curlen = sdslen(s);
 
-    // 扩展 sds 空间
+    // 扩展 sds 空间，保证至少有len个空闲空间大小
     // T = O(N)
     s = sdsMakeRoomFor(s,len);
 
     // 内存不足？直接返回
     if (s == NULL) return NULL;
 
-    // 复制 t 中的内容到字符串后部
+    //找到sdshdr结构体的起始地址，将len个字节拷贝到s+curlen处
     // T = O(N)
     sh = (void*) (s-(sizeof(struct sdshdr)));
     memcpy(s+curlen, t, len);
@@ -451,8 +447,7 @@ sds sdscatlen(sds s, const void *t, size_t len) {
 }
 
 /*
- * 将给定字符串 t 追加到 sds 的末尾
- * 
+ * 将给定的字符串 t 追加到 sds 的末尾
  * 返回值
  *  sds ：追加成功返回新 sds ，失败返回 NULL
  *
@@ -469,10 +464,8 @@ sds sdscat(sds s, const char *t) {
 
 /*
  * 将另一个 sds 追加到一个 sds 的末尾
- * 
  * 返回值
  *  sds ：追加成功返回新 sds ，失败返回 NULL
- *
  * 复杂度
  *  T = O(N)
  */
@@ -484,12 +477,7 @@ sds sdscatsds(sds s, const sds t) {
     return sdscatlen(s, t, sdslen(t));
 }
 
-/*
- * 将字符串 t 的前 len 个字符复制到 sds s 当中，
- * 并在字符串的最后添加终结符。
- *
- * 如果 sds 的长度少于 len 个字符，那么扩展 sds
- *
+/*将长度为len的t字符串复制到s中，末尾添加'\0'，注意是复制，复制后sdshdr->len=len，可能原来的sds空间不够那么要重新申请内存
  * 复杂度
  *  T = O(N)
  *
@@ -502,19 +490,19 @@ sds sdscpylen(sds s, const char *t, size_t len) {
 
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    // sds 现有 buf 的长度
+    // sds 现有 buf 的内存大小：free+len
     size_t totlen = sh->free+sh->len;
 
-    // 如果 s 的 buf 长度不满足 len ，那么扩展它
+    // 如果现有内存大侠不够，那么扩展下
     if (totlen < len) {
-        // T = O(N)
+        // T = O(N) 多分配len-sh->len的空闲空间大小
         s = sdsMakeRoomFor(s,len-sh->len);
         if (s == NULL) return NULL;
-        sh = (void*) (s-(sizeof(struct sdshdr)));
-        totlen = sh->free+sh->len;
+        sh = (void*) (s-(sizeof(struct sdshdr))); //更新结构体的地址
+        totlen = sh->free+sh->len; //总大小是sh->len+sh->free
     }
 
-    // 复制内容
+    // 复制内容，将len长度的字符串复制到s处
     // T = O(N)
     memcpy(s, t, len);
 
@@ -530,8 +518,7 @@ sds sdscpylen(sds s, const char *t, size_t len) {
 }
 
 /*
- * 将字符串复制到 sds 当中，
- * 覆盖原有的字符。
+ * 将字符串复制到 sds 当中，覆盖原有的内容
  *
  * 如果 sds 的长度少于字符串的长度，那么扩展 sds 。
  *
