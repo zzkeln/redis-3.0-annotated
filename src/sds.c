@@ -540,6 +540,7 @@ sds sdscpy(sds s, const char *t) {
  *
  * The function returns the lenght of the null-terminated string
  * representation stored at 's'. */
+//将long long类型的value转换成字符串s，返回字符串长度
 #define SDS_LLSTR_SIZE 21
 int sdsll2str(char *s, long long value) {
     char *p, aux;
@@ -573,6 +574,7 @@ int sdsll2str(char *s, long long value) {
 }
 
 /* Identical sdsll2str(), but for unsigned long long type. */
+//将unsigned long long 类型的v转换成字符串，返回字符串长度
 int sdsull2str(char *s, unsigned long long v) {
     char *p, aux;
     size_t l;
@@ -608,13 +610,13 @@ int sdsull2str(char *s, unsigned long long v) {
 // 根据输入的 long long 值 value ，创建一个 SDS
 sds sdsfromlonglong(long long value) {
     char buf[SDS_LLSTR_SIZE];
-    int len = sdsll2str(buf,value);
+    int len = sdsll2str(buf,value);//字符串长度len
 
-    return sdsnewlen(buf,len);
+    return sdsnewlen(buf,len); //创建一个sdshdr，长度是len
 }
 
 /* 
- * 打印函数，被 sdscatprintf 所调用
+ * 打印函数，被 sdscatprintf 所调用。先用栈上char buf[1024]，如果内存不够再换成堆上分配的内存
  *
  * T = O(N^2)
  */
@@ -804,8 +806,8 @@ sds sdscatfmt(sds s, char const *fmt, ...) {
 }
 
 /*
- * 对 sds 左右两端进行修剪，清除其中 cset 指定的所有字符
- *
+ * 对 sds 左右两端进行修剪，清除其中 cset 指定的所有字符，从左边开始向右，如果字符出现在cset中那么丢掉，直到某个字符没出现在cset中
+ *从右边开始向左，如果某个字符出现在cset中那么丢掉，直到某个字符没出现在cset中
  * 比如 sdsstrim(xxyyabcyyxy, "xy") 将返回 "abc"
  *
  * 复杂性：
@@ -831,38 +833,34 @@ sds sdstrim(sds s, const char *cset) {
     size_t len;
 
     // 设置和记录指针
-    sp = start = s;
-    ep = end = s+sdslen(s)-1;
+    sp = start = s; //指向sdshdr的buf的开始处
+    ep = end = s+sdslen(s)-1;//指向sdshdr的buf的结尾处
 
-    // 修剪, T = O(N^2)
-    while(sp <= end && strchr(cset, *sp)) sp++;
-    while(ep > start && strchr(cset, *ep)) ep--;
+    // 修剪, T = O(N^2) strchr(str, c)：返回c在str的first occurrence
+    while(sp <= end && strchr(cset, *sp)) sp++; //如果*sp在cset中出现，那么sp++
+    while(ep > start && strchr(cset, *ep)) ep--;//如果*ep在cset中出现，那么ep--，
+    //todo：这里循环可以优化下，优化为ep >= sp而不是>start，因为sp之前的不用再判断了
 
     // 计算 trim 完毕之后剩余的字符串长度
     len = (sp > ep) ? 0 : ((ep-sp)+1);
     
-    // 如果有需要，前移字符串内容
+    // 如果有需要，前移字符串内容，将sp处开始的len个字符移动到sh->buf处
     // T = O(N)
     if (sh->buf != sp) memmove(sh->buf, sp, len);
 
     // 添加终结符
-    sh->buf[len] = '\0';
+    sh->buf[len] = '\0'; 
 
     // 更新属性
     sh->free = sh->free+(sh->len-len);
-    sh->len = len;
+    sh->len = len; //长度就是剩下的len
 
     // 返回修剪后的 sds
     return s;
 }
 
-/*
- * 按索引对截取 sds 字符串的其中一段
- * start 和 end 都是闭区间（包含在内）
- *
- * 索引从 0 开始，最大为 sdslen(s) - 1
- * 索引可以是负数， sdslen(s) - 1 == -1
- *
+/*sds只保留索引[start, end]范围内的内容，索引可以是负数，从0开始，直到sdslen(s)-1，-1表示sdslen(s)-1，
+-2表示sdslen(s)-2，其实负数不断加上sdslen(s)就可以变成整数了并且指向的位置不变
  * 复杂度
  *  T = O(N)
  */
@@ -887,15 +885,18 @@ void sdsrange(sds s, int start, int end) {
     size_t newlen, len = sdslen(s);
 
     if (len == 0) return;
+    //将start变成正数，这里没有用while来加只累加了一次，看来允许的start也是有限的
     if (start < 0) {
         start = len+start;
         if (start < 0) start = 0;
     }
+    //将end变成正数，这里没有用while来加只累加了一次，看来允许的end也是有限的
     if (end < 0) {
         end = len+end;
         if (end < 0) end = 0;
     }
     newlen = (start > end) ? 0 : (end-start)+1;
+    //经过上面已经将负数的start和end处理好了，接下来处理start，end是正数但是又比len大的情况
     if (newlen != 0) {
         if (start >= (signed)len) {
             newlen = 0;
@@ -907,7 +908,7 @@ void sdsrange(sds s, int start, int end) {
         start = 0;
     }
 
-    // 如果有需要，对字符串进行移动
+    // 如果有需要，对字符串进行移动，将buf+start处开始的newlen个字节移动到buf处
     // T = O(N)
     if (start && newlen) memmove(sh->buf, sh->buf+start, newlen);
 
@@ -916,7 +917,7 @@ void sdsrange(sds s, int start, int end) {
 
     // 更新属性
     sh->free = sh->free+(sh->len-newlen);
-    sh->len = newlen;
+    sh->len = newlen; 
 }
 
 /*
