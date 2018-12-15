@@ -38,8 +38,7 @@
 
 /*
  * 根据给定的初始化字符串 init 和字符串长度 initlen
- * 创建一个新的 sds
- *
+ * 创建一个新的 sdshdr，sdshdr的属性len=initlen, free=0, buf[0...initlen]=init?init的内容：0
  * 参数
  *  init ：初始化字符串指针
  *  initlen ：初始化字符串的长度
@@ -58,7 +57,7 @@
  * The string is always null-termined (all the sds strings are, always) so
  * even if you create an sds string with:
  *
- * mystring = sdsnewlen("abc",3");
+ * mystring = sdsnewlen("abc",3);
  *
  * You can print the string with printf() as there is an implicit \0 at the
  * end of the string. However the string is binary safe and can contain
@@ -68,6 +67,9 @@ sds sdsnewlen(const void *init, size_t initlen) {
     struct sdshdr *sh;
 
     // 根据是否有初始化内容，选择适当的内存分配方式
+    //如果init为空则调用zcalloc来分配内存因为分配的内存默认都初始化为0，
+    //如果init不为空则调用zmalloc来分配内存因为不对内存初始化后面会用memcpy将init内容拷贝过来
+    //这里分配的内存的指针就是sdshdr结构体的指针
     // T = O(N)
     if (init) {
         // zmalloc 不初始化所分配的内存
@@ -84,7 +86,7 @@ sds sdsnewlen(const void *init, size_t initlen) {
     sh->len = initlen;
     // 新 sds 不预留任何空间
     sh->free = 0;
-    // 如果有指定初始化内容，将它们复制到 sdshdr 的 buf 中
+    // 如果有指定初始化内容，将它们拷贝到 sdshdr 的 buf 中
     // T = O(N)
     if (initlen && init)
         memcpy(sh->buf, init, initlen);
@@ -96,8 +98,8 @@ sds sdsnewlen(const void *init, size_t initlen) {
 }
 
 /*
- * 创建并返回一个只保存了空字符串 "" 的 sds
- *
+ * 创建并返回一个只保存了空字符串 "" 的 sds：sdshdr->len=0, sdshdr->free=0, sdshdr->buf="\0";
+ 即buf是空字符串，末尾包含'\0'
  * 返回值
  *  sds ：创建成功返回 sdshdr 相对应的 sds
  *        创建失败返回 NULL
@@ -121,7 +123,6 @@ sds sdsempty(void) {
  * 返回值
  *  sds ：创建成功返回 sdshdr 相对应的 sds
  *        创建失败返回 NULL
- *
  * 复杂度
  *  T = O(N)
  */
@@ -132,7 +133,8 @@ sds sdsnew(const char *init) {
 }
 
 /*
- * 复制给定 sds 的副本
+ * 复制给定 sds 的副本，这里体现出使用sds作为使用参数的好处，因为和c-string兼容，所以sdsnewlen的第一个参数可以直接放s
+ 如果用sdshdr作为sdsdup的参数的话，那么第一个参数得用sdshdr->buf作为参数，多了一层指针跳转
  *
  * 返回值
  *  sds ：创建成功返回输入 sds 的副本
@@ -147,7 +149,7 @@ sds sdsdup(const sds s) {
 }
 
 /*
- * 释放给定的 sds
+ * 释放给定的 sds，向前跳转8字节找到sdshdr结构体的指针，然后用free释放它
  *
  * 复杂度
  *  T = O(N)
@@ -158,7 +160,7 @@ void sdsfree(sds s) {
     zfree(s-sizeof(struct sdshdr));
 }
 
-// 未使用函数，可能已废弃
+// 假定sds是c-string，然后重置它的属性，设置sdshdr->len=strlen(s)，更新free属性
 /* Set the sds string length to the length as obtained with strlen(), so
  * considering as content only up to the first null term character.
  *
@@ -175,15 +177,12 @@ void sdsfree(sds s) {
  * remains 6 bytes. */
 void sdsupdatelen(sds s) {
     struct sdshdr *sh = (void*) (s-(sizeof(struct sdshdr)));
-    int reallen = strlen(s);
+    int reallen = strlen(s); //重置len属性，假设s是c-string的风格，'\0'后面的内容都丢掉
     sh->free += (sh->len-reallen);
     sh->len = reallen;
 }
 
-/*
- * 在不释放 SDS 的字符串空间的情况下，
- * 重置 SDS 所保存的字符串为空字符串。
- *
+/*清空sds的所有内容，注意是清空并不释放内存。更新free+=len，len=0, buf[0]='\0'
  * 复杂度
  *  T = O(1)
  */
@@ -211,10 +210,8 @@ void sdsclear(sds s) {
  * Note: this does not change the *length* of the sds string as returned
  * by sdslen(), but only the free buffer space we have. */
 /*
- * 对 sds 中 buf 的长度进行扩展，确保在函数执行之后，
- * buf 至少会有 addlen + 1 长度的空余空间
- * （额外的 1 字节是为 \0 准备的）
- *
+ * 对 sds 中 buf 的内存尝试进行扩展，确保在函数执行之后，free >=addlen，不仅仅分配len+addlen的大小，会预分配一些内存出来，要么预分配len+addlen的内存
+ 要么预分配1M的内存
  * 返回值
  *  sds ：扩展成功返回扩展后的 sds
  *        扩展失败返回 NULL
@@ -222,6 +219,7 @@ void sdsclear(sds s) {
  * 复杂度
  *  T = O(N)
  */
+//调用这个方法后参数sds s就可能无效了，需要使用返回值sds来用了，因为内部预分配内存会调用realloc可能会换块内存
 sds sdsMakeRoomFor(sds s, size_t addlen) {
 
     struct sdshdr *sh, *newsh;
@@ -238,24 +236,22 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
     len = sdslen(s);
     sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    // s 最少需要的长度
+    // s 最少需要的内存大小
     newlen = (len+addlen);
 
-    // 根据新长度，为 s 分配新空间所需的大小
+    // sdshdr需要的内存大小小于1M，那么分配2倍大小的内存，除了当前的len和addlen，多出来len+addlen预留空间会更新到free中
     if (newlen < SDS_MAX_PREALLOC)
-        // 如果新长度小于 SDS_MAX_PREALLOC 
-        // 那么为它分配两倍于所需长度的空间
         newlen *= 2;
     else
-        // 否则，分配长度为目前长度加上 SDS_MAX_PREALLOC
+        // 否则，多分配1M内存，除了当前的len和addlen，多出来1M大小会更新到free中
         newlen += SDS_MAX_PREALLOC;
-    // T = O(N)
+    // T = O(N)，在当前内存基础上realloc下内存，大小包括newlen+结构体字节数+1字节（末尾的'\0')
     newsh = zrealloc(sh, sizeof(struct sdshdr)+newlen+1);
 
     // 内存不足，分配失败，返回
     if (newsh == NULL) return NULL;
 
-    // 更新 sds 的空余长度
+    // len保持不变，free大小为最新的大小
     newsh->free = newlen - len;
 
     // 返回 sds
@@ -263,8 +259,7 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
 }
 
 /*
- * 回收 sds 中的空闲空间，
- * 回收不会对 sds 中保存的字符串内容做任何修改。
+ * 回收free内存，调用realloc回收，len和buf都不会改变
  *
  * 返回值
  *  sds ：内存调整后的 sds
@@ -278,12 +273,13 @@ sds sdsMakeRoomFor(sds s, size_t addlen) {
  *
  * After the call, the passed sds string is no longer valid and all the
  * references must be substituted with the new pointer returned by the call. */
+//调用这个方法后参数sds s就可能无效了，需要使用返回值sds来用了，因为内部回收内存会调用realloc可能会换块内存
 sds sdsRemoveFreeSpace(sds s) {
     struct sdshdr *sh;
 
     sh = (void*) (s-(sizeof(struct sdshdr)));
 
-    // 进行内存重分配，让 buf 的长度仅仅足够保存字符串内容
+    // 进行内存重分配，让 buf 的长度仅仅足够保存字符串内容，使得free=0
     // T = O(N)
     sh = zrealloc(sh, sizeof(struct sdshdr)+sh->len+1);
 
