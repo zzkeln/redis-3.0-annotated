@@ -34,7 +34,7 @@
 /* Node, List, and Iterator are the only data structures used currently. */
 
 /*
- * 双端链表节点
+ * 双端链表节点，节点只存储一个value，并没有存储key-value
  */
 typedef struct listNode {
 
