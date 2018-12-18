@@ -909,7 +909,7 @@ dictEntry *dictNext(dictIterator *iter)
 {
     while (1) {
 
-        // 进入这个循环有两种可能：
+        // 进入这个if有两种可能：
         // 1) 这是迭代器第一次运行
         // 2) 当前索引链表中的节点已经迭代完（NULL 为链表的表尾）
         if (iter->entry == NULL) {
@@ -926,11 +926,10 @@ dictEntry *dictNext(dictIterator *iter)
                 else
                     iter->fingerprint = dictFingerprint(iter->d);
             }
-            // 更新索引
+            // 更新数组中位置
             iter->index++;
 
-            // 如果迭代器的当前索引大于当前被迭代的哈希表的大小
-            // 那么说明这个哈希表已经迭代完毕
+            // 如果迭代器的当前索引大于当前被迭代的哈希表的大小，那么说明这个哈希表已经迭代完毕
             if (iter->index >= (signed) ht->size) {
                 // 如果正在 rehash 的话，那么说明 1 号哈希表也正在使用中
                 // 那么继续对 1 号哈希表进行迭代
@@ -944,8 +943,7 @@ dictEntry *dictNext(dictIterator *iter)
                 }
             }
 
-            // 如果进行到这里，说明这个哈希表并未迭代完
-            // 更新节点指针，指向下个索引链表的表头节点
+            // 如果进行到这里，说明哈希表（可能已经切换到1号哈希表了）并未迭代完，更新节点指针，指向下个索引链表的表头节点
             iter->entry = ht->table[iter->index];
         } else {
             // 执行到这里，说明程序正在迭代某个链表
@@ -969,7 +967,6 @@ dictEntry *dictNext(dictIterator *iter)
 
 /*
  * 释放给定字典迭代器
- *
  * T = O(1)
  */
 void dictReleaseIterator(dictIterator *iter)
@@ -989,7 +986,7 @@ void dictReleaseIterator(dictIterator *iter)
 /* Return a random entry from the hash table. Useful to
  * implement randomized algorithms */
 /*
- * 随机返回字典中任意一个节点。
+ * 随机返回字典中任意一个节点（会执行单步rehash）
  *
  * 可用于实现随机化算法。
  *
@@ -1009,29 +1006,29 @@ dictEntry *dictGetRandomKey(dict *d)
     // 进行单步 rehash
     if (dictIsRehashing(d)) _dictRehashStep(d);
 
-    // 如果正在 rehash ，那么将 1 号哈希表也作为随机查找的目标
+    // 如果正在 rehash ，那么将 1 号哈希表也作为随机查找的目标。先随机找个链表
     if (dictIsRehashing(d)) {
         // T = O(N)
         do {
             h = random() % (d->ht[0].size+d->ht[1].size);
             he = (h >= d->ht[0].size) ? d->ht[1].table[h - d->ht[0].size] :
                                       d->ht[0].table[h];
-        } while(he == NULL);
+        } while(he == NULL); //如果找到的链表为空那么重新再找下，直到不为空
     // 否则，只从 0 号哈希表中查找节点
     } else {
         // T = O(N)
         do {
             h = random() & d->ht[0].sizemask;
             he = d->ht[0].table[h];
-        } while(he == NULL);
+        } while(he == NULL); //如果找到的链表为空那么重新再找下，直到不为空
     }
 
     /* Now we found a non empty bucket, but it is a linked
      * list and we need to get a random element from the list.
      * The only sane way to do so is counting the elements and
      * select a random index. */
-    // 目前 he 已经指向一个非空的节点链表
-    // 程序将从这个链表随机返回一个节点
+    // 目前 he 已经指向一个非空的节点链表，程序将从这个链表随机返回一个节点
+    //先看链表有多长，然后得到一个随机位置，再去这个位置拿节点，所以需要遍历两遍链表
     listlen = 0;
     orighe = he;
     // 计算节点数量, T = O(1)
