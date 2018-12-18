@@ -180,9 +180,7 @@ unsigned int dictGenCaseHashFunction(const unsigned char *buf, int len) {
 /* Reset a hash table already initialized with ht_init().
  * NOTE: This function should only be called by ht_destroy(). */
 /*
- * 重置（或初始化）给定哈希表的各项属性值
- *
- * p.s. 上面的英文注释已经过期
+ * 重置（或初始化）给定哈希表的各项属性值，全部设置为0或NULL
  *
  * T = O(1)
  */
@@ -203,24 +201,23 @@ static void _dictReset(dictht *ht)
 dict *dictCreate(dictType *type,
         void *privDataPtr)
 {
-    dict *d = zmalloc(sizeof(*d));
+    dict *d = zmalloc(sizeof(*d)); //为dict分配内存
 
-    _dictInit(d,type,privDataPtr);
+    _dictInit(d,type,privDataPtr); //初始化dict
 
     return d;
 }
 
 /* Initialize the hash table */
 /*
- * 初始化哈希表
+ * 初始化哈希表，哈希表数组内存尚未分配
  *
  * T = O(1)
  */
 int _dictInit(dict *d, dictType *type,
         void *privDataPtr)
 {
-    // 初始化两个哈希表的各项属性值
-    // 但暂时还不分配内存给哈希表数组
+    // 初始化两个哈希表的各项属性值，但暂时还不分配内存给哈希表数组（table设置为NULL)
     _dictReset(&d->ht[0]);
     _dictReset(&d->ht[1]);
 
@@ -242,13 +239,9 @@ int _dictInit(dict *d, dictType *type,
 /* Resize the table to the minimal size that contains all the elements,
  * but with the invariant of a USED/BUCKETS ratio near to <= 1 */
 /*
- * 缩小给定字典
- * 让它的已用节点数和字典大小之间的比率接近 1:1
- *
+ * 缩小给定字典，让它的已用节点数和字典大小之间的比率接近 1:1
  * 返回 DICT_ERR 表示字典已经在 rehash ，或者 dict_can_resize 为假。
- *
  * 成功创建体积更小的 ht[1] ，可以开始 resize 时，返回 DICT_OK。
- *
  * T = O(N)
  */
 int dictResize(dict *d)
