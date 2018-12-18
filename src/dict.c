@@ -263,14 +263,11 @@ int dictResize(dict *d)
 
 /* Expand or create the hash table */
 /*
- * 创建一个新的哈希表，并根据字典的情况，选择以下其中一个动作来进行：
- *
- * 1) 如果字典的 0 号哈希表为空，那么将新哈希表设置为 0 号哈希表
- * 2) 如果字典的 0 号哈希表非空，那么将新哈希表设置为 1 号哈希表，
- *    并打开字典的 rehash 标识，使得程序可以开始对字典进行 rehash
+ * 创建一个新哈希表并未它分配内存，并根据字典的情况，选择以下其中一个动作来进行：
+ * 1) 如果字典的 0 号哈希表为空，那么把新哈希表赋值给0号哈希表
+ * 2) 如果字典的 0 号哈希表非空，那么将新哈希表赋值给1号哈希表并设置rehashidx=0表示可以开始rehash
  *
  * size 参数不够大，或者 rehash 已经在进行时，返回 DICT_ERR 。
- *
  * 成功创建 0 号哈希表，或者 1 号哈希表时，返回 DICT_OK 。
  *
  * T = O(N)
@@ -310,7 +307,7 @@ int dictExpand(dict *d, unsigned long size)
 
     /* Prepare a second hash table for incremental rehashing */
     // 如果 0 号哈希表非空，那么这是一次 rehash ：
-    // 程序将新哈希表设置为 1 号哈希表，
+    // 程序将新哈希表设置为 1 号哈希表，设置rehashidx=0表示下个可以搬迁的位置是0
     // 并将字典的 rehash 标识打开，让程序可以开始对字典进行 rehash
     d->ht[1] = n;
     d->rehashidx = 0;
