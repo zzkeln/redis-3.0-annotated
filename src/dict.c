@@ -774,10 +774,8 @@ void dictRelease(dict *d)
 }
 
 /*
- * 返回字典中包含键 key 的节点
- *
+ * 返回字典中包含键 key 的节点（执行单步rehash）
  * 找到返回节点，找不到返回 NULL
- *
  * T = O(1)
  */
 dictEntry *dictFind(dict *d, const void *key)
@@ -785,7 +783,7 @@ dictEntry *dictFind(dict *d, const void *key)
     dictEntry *he;
     unsigned int h, idx, table;
 
-    // 0号哈希表为空，直接返回NULL（不管有没有rehash，ht[0]）
+    // 0号哈希表为空，直接返回NULL（不管有没有rehash，ht[0]都不应该为空，除非dict为空）
     if (d->ht[0].size == 0) return NULL; /* We don't have a table at all */
 
     // 如果条件允许的话，进行单步 rehash
@@ -804,16 +802,12 @@ dictEntry *dictFind(dict *d, const void *key)
         he = d->ht[table].table[idx];
         // T = O(1)
         while(he) {
-
+            //找到这个key了！
             if (dictCompareKeys(d, key, he->key))
                 return he;
-
             he = he->next;
         }
-
-        // 如果程序遍历完 0 号哈希表，仍然没找到指定的键的节点
-        // 那么程序会检查字典是否在进行 rehash ，
-        // 然后才决定是直接返回 NULL ，还是继续查找 1 号哈希表
+        //如果没有在rehash，那么1号哈希表为空，不用查找了跳出循环；如果在rehash，那么也从1号哈希表中查找
         if (!dictIsRehashing(d)) return NULL;
     }
 
@@ -822,11 +816,8 @@ dictEntry *dictFind(dict *d, const void *key)
 }
 
 /*
- * 获取包含给定键的节点的值
- *
- * 如果节点不为空，返回节点的值
- * 否则返回 NULL
- *
+ * 获取包含给定键的节点的值（dictFind内会执行单步rehash）
+ * 如果节点不为空，返回节点的值，否则返回 NULL
  * T = O(1)
  */
 void *dictFetchValue(dict *d, const void *key) {
@@ -834,7 +825,6 @@ void *dictFetchValue(dict *d, const void *key) {
 
     // T = O(1)
     he = dictFind(d,key);
-
     return he ? dictGetVal(he) : NULL;
 }
 
@@ -844,6 +834,7 @@ void *dictFetchValue(dict *d, const void *key) {
  * the fingerprint again when the iterator is released.
  * If the two fingerprints are different it means that the user of the iterator
  * performed forbidden operations against the dictionary while iterating. */
+//计算字典的指纹，将字典的状态（table, size, used)来进行xor获得一个int64_t作为指纹
 long long dictFingerprint(dict *d) {
     long long integers[6], hash = 0;
     int j;
@@ -877,8 +868,7 @@ long long dictFingerprint(dict *d) {
 }
 
 /*
- * 创建并返回给定字典的不安全迭代器
- *
+ * 返回字典的不安全迭代器
  * T = O(1)
  */
 dictIterator *dictGetIterator(dict *d)
@@ -896,8 +886,7 @@ dictIterator *dictGetIterator(dict *d)
 }
 
 /*
- * 创建并返回给定节点的安全迭代器
- *
+ 返回字典的一个安全迭代器
  * T = O(1)
  */
 dictIterator *dictGetSafeIterator(dict *d) {
