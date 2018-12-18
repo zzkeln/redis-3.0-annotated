@@ -347,7 +347,6 @@ int dictExpand(dict *d, unsigned long size)
  * T = O(N)
  */
 int dictRehash(dict *d, int n) {
-
     // 只可以在 rehash 进行中时执行
     if (!dictIsRehashing(d)) return 0;
 
@@ -357,7 +356,8 @@ int dictRehash(dict *d, int n) {
         dictEntry *de, *nextde;
 
         /* Check if we already rehashed the whole table... */
-        // 如果 0 号哈希表为空，那么表示 rehash 执行完毕
+        // 如果 0 号哈希表为空，那么表示 rehash 执行完毕；
+        //那么释放0号哈希表，将原来的1号设置为0号，然后重置1号哈希表、关闭rehashidx标识
         // T = O(1)
         if (d->ht[0].used == 0) {
             // 释放 0 号哈希表
@@ -412,7 +412,7 @@ int dictRehash(dict *d, int n) {
         d->rehashidx++;
     }
 
-    return 1;
+    return 1; //其实返回1也不一定还有key需要搬迁，可能这次N步搬迁就搬完了，留待下次搬迁时再确认了
 }
 
 /*
