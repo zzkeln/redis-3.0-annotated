@@ -710,7 +710,7 @@ int dictDeleteNoFree(dict *ht, const void *key) {
 
 /* Destroy an entire dictionary */
 /*
- * 删除哈希表上的所有节点，并重置哈希表的各项属性
+ * 删除哈希表上的所有节点并释放节点内存，重置哈希表的各项属性
  *
  * T = O(N)
  */
@@ -728,7 +728,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
         // 跳过空索引
         if ((he = ht->table[i]) == NULL) continue;
 
-        // 遍历整个链表
+        // 遍历删除链表中所有节点
         // T = O(1)
         while(he) {
             nextHe = he->next;
@@ -748,7 +748,7 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
     }
 
     /* Free the table and the allocated cache structure */
-    // 释放哈希表结构
+    // 释放哈希表中的数组
     zfree(ht->table);
 
     /* Re-initialize the table */
@@ -760,16 +760,16 @@ int _dictClear(dict *d, dictht *ht, void(callback)(void *)) {
 
 /* Clear & Release the hash table */
 /*
- * 删除并释放整个字典
+ * 删除并释放整个字典内存
  *
  * T = O(N)
  */
 void dictRelease(dict *d)
 {
-    // 删除并清空两个哈希表
+    // 删除0号和1号哈希表中所有节点，重置各项属性
     _dictClear(d,&d->ht[0],NULL);
     _dictClear(d,&d->ht[1],NULL);
-    // 释放节点结构
+    // 释放整个词典内存
     zfree(d);
 }
 
@@ -785,7 +785,7 @@ dictEntry *dictFind(dict *d, const void *key)
     dictEntry *he;
     unsigned int h, idx, table;
 
-    // 字典（的哈希表）为空
+    // 0号哈希表为空，直接返回NULL（不管有没有rehash，ht[0]）
     if (d->ht[0].size == 0) return NULL; /* We don't have a table at all */
 
     // 如果条件允许的话，进行单步 rehash
