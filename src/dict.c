@@ -80,6 +80,7 @@ static int _dictInit(dict *ht, dictType *type, void *privDataPtr);
 /* -------------------------- hash functions -------------------------------- */
 
 /* Thomas Wang's 32 bit Mix Function */
+//一个计算unsigned int 的哈希值的方法
 unsigned int dictIntHashFunction(unsigned int key)
 {
     key += ~(key << 15);
@@ -92,6 +93,7 @@ unsigned int dictIntHashFunction(unsigned int key)
 }
 
 /* Identity hash function for integer keys */
+//直接返回参数key，貌似这个函数没在用
 unsigned int dictIdentityHashFunction(unsigned int key)
 {
     return key;
@@ -99,10 +101,11 @@ unsigned int dictIdentityHashFunction(unsigned int key)
 
 static uint32_t dict_hash_function_seed = 5381;
 
+//设置hash seed
 void dictSetHashFunctionSeed(uint32_t seed) {
     dict_hash_function_seed = seed;
 }
-
+//获得hash seed
 uint32_t dictGetHashFunctionSeed(void) {
     return dict_hash_function_seed;
 }
@@ -118,6 +121,7 @@ uint32_t dictGetHashFunctionSeed(void) {
  * 2. It will not produce the same results on little-endian and big-endian
  *    machines.
  */
+//使用murmurhash2计算（key, len)的哈希值
 unsigned int dictGenHashFunction(const void *key, int len) {
     /* 'm' and 'r' are mixing constants generated offline.
      They're not really 'magic', they just happen to work well.  */
@@ -162,11 +166,12 @@ unsigned int dictGenHashFunction(const void *key, int len) {
 }
 
 /* And a case insensitive hash function (based on djb hash) */
+//对buf大小写不敏感的hash函数，大小写不敏感就是全部字母转成小写处理，这样就统一了大小写
 unsigned int dictGenCaseHashFunction(const unsigned char *buf, int len) {
     unsigned int hash = (unsigned int)dict_hash_function_seed;
 
     while (len--)
-        hash = ((hash << 5) + hash) + (tolower(*buf++)); /* hash * 33 + c */
+        hash = ((hash << 5) + hash) + (tolower(*buf++)); /* hash * 33 + c ，将c转换成小写*/
     return hash;
 }
 
