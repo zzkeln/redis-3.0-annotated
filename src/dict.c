@@ -913,10 +913,8 @@ dictEntry *dictNext(dictIterator *iter)
         // 1) 这是迭代器第一次运行
         // 2) 当前索引链表中的节点已经迭代完（NULL 为链表的表尾）
         if (iter->entry == NULL) {
-
             // 指向被迭代的哈希表
             dictht *ht = &iter->d->ht[iter->table];
-
             // 初次迭代时执行
             if (iter->index == -1 && iter->table == 0) {
                 // 如果是安全迭代器，那么更新安全迭代器计数器
@@ -1116,9 +1114,7 @@ static unsigned long rev(unsigned long v) {
 /* dictScan() is used to iterate over the elements of a dictionary.
  *
  * dictScan() 函数用于迭代给定字典中的元素。
- *
  * Iterating works in the following way:
- *
  * 迭代按以下方式执行：
  *
  * 1) Initially you call the function using a cursor (v) value of 0.
@@ -1345,7 +1341,6 @@ unsigned long dictScan(dict *d,
 /* Expand the hash table if needed */
 /*
  * 根据需要，初始化字典（的哈希表），或者对字典（的现有哈希表）进行扩展
- *
  * T = O(N)
  */
 static int _dictExpandIfNeeded(dict *d)
@@ -1401,12 +1396,10 @@ static unsigned long _dictNextPower(unsigned long size)
  * a hash entry for the given 'key'.
  * If the key already exists, -1 is returned.
  *
- * 返回可以将 key 插入到哈希表的索引位置
- * 如果 key 已经存在于哈希表，那么返回 -1
+ * 返回可以将 key 插入到哈希表的索引位置，如果 key 已经存在于哈希表，那么返回 -1
  *
  * Note that if we are in the process of rehashing the hash table, the
  * index is always returned in the context of the second (new) hash table. 
- *
  * 注意，如果字典正在进行 rehash ，那么总是返回 1 号哈希表的索引。
  * 因为在字典进行 rehash 时，新节点总是插入到 1 号哈希表。
  *
@@ -1418,7 +1411,7 @@ static int _dictKeyIndex(dict *d, const void *key)
     dictEntry *he;
 
     /* Expand the hash table if needed */
-    // 单步 rehash
+    // 尝试扩大hash表的大小
     // T = O(N)
     if (_dictExpandIfNeeded(d) == DICT_ERR)
         return -1;
@@ -1437,13 +1430,14 @@ static int _dictKeyIndex(dict *d, const void *key)
         // T = O(1)
         he = d->ht[table].table[idx];
         while(he) {
+            //如果存在那么返回1
             if (dictCompareKeys(d, key, he->key))
                 return -1;
             he = he->next;
         }
 
-        // 如果运行到这里时，说明 0 号哈希表中所有节点都不包含 key
-        // 如果这时 rehahs 正在进行，那么继续对 1 号哈希表进行 rehash
+        // 如果没在rehash，那么1号哈希表是空的，没必要找了，直接跳出循环
+        //如果在rehash，那么应该返回1号哈希表的位置，所以继续循环（但0号哈希表也必须访问下来判断该key是否已出现）
         if (!dictIsRehashing(d)) break;
     }
 
@@ -1452,7 +1446,7 @@ static int _dictKeyIndex(dict *d, const void *key)
 }
 
 /*
- * 清空字典上的所有哈希表节点，并重置字典属性
+ * 清空字典上的所有哈希表节点，并重置字典属性，和dictRelease区别是不释放dict（dictRelease释放整个字典内存）
  *
  * T = O(N)
  */
@@ -1493,6 +1487,7 @@ of the library. */
 /* ----------------------- Debugging ------------------------*/
 
 #define DICT_STATS_VECTLEN 50
+//统计每个链表的长度信息等
 static void _dictPrintStatsHt(dictht *ht) {
     unsigned long i, slots = 0, chainlen, maxchainlen = 0;
     unsigned long totchainlen = 0;
@@ -1519,6 +1514,7 @@ static void _dictPrintStatsHt(dictht *ht) {
             chainlen++;
             he = he->next;
         }
+        //如果链表长度超过50了，那么当作50来处理
         clvector[(chainlen < DICT_STATS_VECTLEN) ? chainlen : (DICT_STATS_VECTLEN-1)]++;
         if (chainlen > maxchainlen) maxchainlen = chainlen;
         totchainlen += chainlen;
@@ -1547,6 +1543,7 @@ void dictPrintStats(dict *d) {
 
 /* ----------------------- StringCopy Hash Table Type ------------------------*/
 
+//计算murmurhash2
 static unsigned int _dictStringCopyHTHashFunction(const void *key)
 {
     return dictGenHashFunction(key, strlen(key));
@@ -1590,11 +1587,11 @@ dictType dictTypeHeapStringCopyKey = {
 /* This is like StringCopy but does not auto-duplicate the key.
  * It's used for intepreter's shared strings. */
 dictType dictTypeHeapStrings = {
-    _dictStringCopyHTHashFunction, /* hash function */
+    _dictStringCopyHTHashFunction, /* hash function 计算哈希值的函数，使用murmurhash2算法*/
     NULL,                          /* key dup */
     NULL,                          /* val dup */
-    _dictStringCopyHTKeyCompare,   /* key compare */
-    _dictStringDestructor,         /* key destructor */
+    _dictStringCopyHTKeyCompare,   /* key compare 调用strcmp比较两个key是否相等 */
+    _dictStringDestructor,         /* key destructor 调用zfree来释放key */
     NULL                           /* val destructor */
 };
 
