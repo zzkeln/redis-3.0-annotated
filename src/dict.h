@@ -7,10 +7,7 @@
  *
  * 这个文件实现了一个内存哈希表，
  * 它支持插入、删除、替换、查找和获取随机元素等操作。
- *
- * 哈希表会自动在表的大小的二次方之间进行调整。
- *
- * 键的冲突通过链表来解决。
+ * 哈希表会自动调整大小（rehash)，使用2的次方作为表的大小，用开链法解决冲突
  *
  * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
  * All rights reserved.
@@ -59,7 +56,7 @@
 #define DICT_NOTUSED(V) ((void) V)
 
 /*
- * 哈希表节点
+ * 哈希表节点定义，包括key, value（union类型）和指向下个节点的指针
  */
 typedef struct dictEntry {
     
@@ -108,8 +105,7 @@ typedef struct dictType {
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
 /*
- * 哈希表
- *
+ * 哈希表的定义，包括一个数组，里面每个元素都是dictEntry*；数组大小size，已拥有节点数used，和用于计算位置的掩码sizemask
  * 每个字典都使用两个哈希表，从而实现渐进式 rehash 。
  */
 typedef struct dictht {
@@ -134,17 +130,17 @@ typedef struct dictht {
  */
 typedef struct dict {
 
-    // 类型特定函数
+    // 类型特定函数，用于赋值key、value，销毁key、value，对比key是否相等、计算key的哈希值
     dictType *type;
 
     // 私有数据
     void *privdata;
 
-    // 哈希表
+    // 哈希表，2个dictht，用于rehash
     dictht ht[2];
 
     // rehash 索引
-    // 当 rehash 不在进行时，值为 -1
+    // 当 rehash 不在进行时，值为 -1；当不为-1时，表示下个待搬迁的位置？
     int rehashidx; /* rehashing not in progress if rehashidx == -1 */
 
     // 目前正在运行的安全迭代器的数量
@@ -159,10 +155,10 @@ typedef struct dict {
 /*
  * 字典迭代器
  *
- * 如果 safe 属性的值为 1 ，那么在迭代进行的过程中，
- * 程序仍然可以执行 dictAdd 、 dictFind 和其他函数，对字典进行修改。
+ * 如果 safe 属性的值为 1 ，那么是安全迭代器，可以在迭代过程中调用dictAdd 、 dictFind 和其他函数，对字典进行修改。
+ * 其实，用了nextEntry来保存下个位置，所以怎么改都行。
  *
- * 如果 safe 不为 1 ，那么程序只会调用 dictNext 对字典进行迭代，
+ * 如果 safe 不为 1 ，那么程序只能调用 dictNext 对字典进行迭代，
  * 而不对字典进行修改。
  */
 typedef struct dictIterator {
@@ -170,8 +166,8 @@ typedef struct dictIterator {
     // 被迭代的字典
     dict *d;
 
-    // table ：正在被迭代的哈希表号码，值可以是 0 或 1 。
-    // index ：迭代器当前所指向的哈希表索引位置。
+    // table ：正在被迭代的是哪个哈希表，0或1
+    // index ：迭代器当前所指向的哈希表数组位置。
     // safe ：标识这个迭代器是否安全
     int table, index, safe;
 
@@ -244,11 +240,11 @@ typedef void (dictScanFunction)(void *privdata, const dictEntry *de);
 #define dictGetSignedIntegerVal(he) ((he)->v.s64)
 // 返回给定节点的无符号整数值
 #define dictGetUnsignedIntegerVal(he) ((he)->v.u64)
-// 返回给定字典的大小
+// 返回给定字典的大小，包括ht0和ht1的slot数量
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
-// 返回字典的已有节点数量
+// 返回字典的已有节点数量，包括ht0和ht1在使用的数量
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
-// 查看字典是否正在 rehash
+// 查看字典是否正在 rehash，不等于-1就是正在rehash
 #define dictIsRehashing(ht) ((ht)->rehashidx != -1)
 
 /* API */
