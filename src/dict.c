@@ -899,7 +899,7 @@ dictIterator *dictGetSafeIterator(dict *d) {
 }
 
 /*
- * 返回迭代器指向的当前节点
+ * 返回迭代器下个节点，如果在rehash那么也会利用1号哈希表（如果0号哈希表已遍历完的话）
  *
  * 字典迭代完毕时，返回 NULL
  *
@@ -1066,23 +1066,25 @@ dictEntry *dictGetRandomKey(dict *d)
  * statistics. However the function is much faster than dictGetRandomKey()
  * at producing N elements, and the elements are guaranteed to be non
  * repeating. */
+//随机获得count个节点，随机找到链表，然后把这个链表都塞到返回结果里，如果不够的话那么塞邻近的下个链表。如果仍然不够那么找1号链表
 int dictGetRandomKeys(dict *d, dictEntry **des, int count) {
     int j; /* internal hash table id, 0 or 1. */
     int stored = 0;
 
-    if (dictSize(d) < count) count = dictSize(d);
+    if (dictSize(d) < count) count = dictSize(d); //如果字典中不足count个节点，那么只返回字典节点数个节点
     while(stored < count) {
         for (j = 0; j < 2; j++) {
             /* Pick a random point inside the hash table 0 or 1. */
+            //随机选个链表
             unsigned int i = random() & d->ht[j].sizemask;
-            int size = d->ht[j].size;
+            int size = d->ht[j].size; //这个哈希表有多少个节点
 
             /* Make sure to visit every bucket by iterating 'size' times. */
+            //遍历完整个哈希表，确保获得足够的节点；如果仍然不够那么跳出循环后会继续从下个哈希表中查找
             while(size--) {
                 dictEntry *he = d->ht[j].table[i];
                 while (he) {
-                    /* Collect all the elements of the buckets found non
-                     * empty while iterating. */
+                    /* Collect all the elements of the buckets found non-empty while iterating. */
                     *des = he;
                     des++;
                     he = he->next;
