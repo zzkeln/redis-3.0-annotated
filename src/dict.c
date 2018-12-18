@@ -341,8 +341,7 @@ int dictExpand(dict *d, unsigned long size)
  * than one key as we use chaining) from the old to the new hash table.
  *
  * 注意，每步 rehash 都是以一个哈希表索引（桶）作为单位的，
- * 一个桶里可能会有多个节点，
- * 被 rehash 的桶里的所有节点都会被移动到新哈希表。
+ * 一个桶里可能会有多个节点，被 rehash 的桶里的所有节点都会被移动到新哈希表。
  *
  * T = O(N)
  */
@@ -350,7 +349,7 @@ int dictRehash(dict *d, int n) {
     // 只可以在 rehash 进行中时执行
     if (!dictIsRehashing(d)) return 0;
 
-    // 进行 N 步迁移
+    // 进行 N 步迁移，跳过哪些数组元素为空的位置
     // T = O(N)
     while(n--) {
         dictEntry *de, *nextde;
@@ -412,12 +411,11 @@ int dictRehash(dict *d, int n) {
         d->rehashidx++;
     }
 
-    return 1; //其实返回1也不一定还有key需要搬迁，可能这次N步搬迁就搬完了，留待下次搬迁时再确认了
+    return 1; //其实返回1也不一定还有key需要搬迁，可能这次N步搬迁恰好搬完了，留待下次搬迁时再确认了
 }
 
 /*
  * 返回以毫秒为单位的 UNIX 时间戳
- *
  * T = O(1)
  */
 long long timeInMilliseconds(void) {
@@ -429,8 +427,7 @@ long long timeInMilliseconds(void) {
 
 /* Rehash for an amount of time between ms milliseconds and ms+1 milliseconds */
 /*
- * 在给定毫秒数内，以 100 步为单位，对字典进行 rehash 。
- *
+ * 在给定毫秒数内，以 100 步为单位，对字典进行 rehash 。返回进行rehash的步数
  * T = O(N)
  */
 int dictRehashMilliseconds(dict *d, int ms) {
@@ -463,7 +460,7 @@ int dictRehashMilliseconds(dict *d, int ms) {
  *
  * 这个函数被多个通用的查找、更新操作调用，
  * 它可以让字典在被使用的同时进行 rehash 。
- *
+ * 进行单步rehash
  * T = O(1)
  */
 static void _dictRehashStep(dict *d) {
@@ -471,20 +468,15 @@ static void _dictRehashStep(dict *d) {
 }
 
 /* Add an element to the target hash table */
-/*
- * 尝试将给定键值对添加到字典中
- *
- * 只有给定键 key 不存在于字典时，添加操作才会成功
- *
+/*将key、value添加到字典中，key不存在时才会添加成功，如果key已经存在那么添加会失败
  * 添加成功返回 DICT_OK ，失败返回 DICT_ERR
- *
  * 最坏 T = O(N) ，平滩 O(1) 
  */
 int dictAdd(dict *d, void *key, void *val)
 {
     // 尝试添加键到字典，并返回包含了这个键的新哈希节点
     // T = O(N)
-    dictEntry *entry = dictAddRaw(d,key);
+    dictEntry *entry = dictAddRaw(d,key); //这个函数如果key存在的话会返回NULL
 
     // 键已存在，添加失败
     if (!entry) return DICT_ERR;
@@ -513,13 +505,8 @@ int dictAdd(dict *d, void *key, void *val)
  * If key was added, the hash entry is returned to be manipulated by the caller.
  */
 /*
- * 尝试将键插入到字典中
- *
- * 如果键已经在字典存在，那么返回 NULL
- *
- * 如果键不存在，那么程序创建新的哈希节点，
- * 将节点和键关联，并插入到字典，然后返回节点本身。
- *
+ * 尝试将键插入到字典中（如果key已存在则不添加并返回NULL）。会执行单步rehash。如果正在rehash，会添加
+ * 1号哈希表中，否则添加到0号哈希表
  * T = O(N)
  */
 dictEntry *dictAddRaw(dict *d, void *key)
@@ -534,8 +521,7 @@ dictEntry *dictAddRaw(dict *d, void *key)
 
     /* Get the index of the new element, or -1 if
      * the element already exists. */
-    // 计算键在哈希表中的索引值
-    // 如果值为 -1 ，那么表示键已经存在
+    // 计算键在哈希表中的索引值 如果值为 -1 ，那么表示键已经存在，如果key已存在返回NULL
     // T = O(N)
     if ((index = _dictKeyIndex(d, key)) == -1)
         return NULL;
@@ -547,7 +533,7 @@ dictEntry *dictAddRaw(dict *d, void *key)
     ht = dictIsRehashing(d) ? &d->ht[1] : &d->ht[0];
     // 为新节点分配空间
     entry = zmalloc(sizeof(*entry));
-    // 将新节点插入到链表表头
+    // 将新节点插入到哈希表的数组中的链表头部
     entry->next = ht->table[index];
     ht->table[index] = entry;
     // 更新哈希表已使用节点数量
@@ -580,8 +566,7 @@ int dictReplace(dict *d, void *key, void *val)
 
     /* Try to add the element. If the key
      * does not exists dictAdd will suceed. */
-    // 尝试直接将键值对添加到字典
-    // 如果键 key 不存在的话，添加会成功
+    // 尝试直接将键值对添加到字典,如果键 key 不存在的话，添加会成功
     // T = O(N)
     if (dictAdd(d, key, val) == DICT_OK)
         return 1;
@@ -595,7 +580,8 @@ int dictReplace(dict *d, void *key, void *val)
      * as the previous one. In this context, think to reference counting,
      * you want to increment (set), and then decrement (free), and not the
      * reverse. */
-    // 先保存原有的值的指针
+    //注意必须先设置新值，然后再释放旧值；这个顺序不能颠倒，例如 假设新的value和旧的value是同一个对象，
+    //如果先释放的话可能就有问题了。
     auxentry = *entry;
     // 然后设置新的值
     // T = O(1)
@@ -613,15 +599,7 @@ int dictReplace(dict *d, void *key, void *val)
  * existing key is returned.)
  *
  * See dictAddRaw() for more information. */
-/*
- * dictAddRaw() 根据给定 key 释放存在，执行以下动作：
- *
- * 1) key 已经存在，返回包含该 key 的字典节点
- * 2) key 不存在，那么将 key 添加到字典
- *
- * 不论发生以上的哪一种情况，
- * dictAddRaw() 都总是返回包含给定 key 的字典节点。
- *
+/*如果key已经存在那么返回相应entry；如果不存在那么添加到dict中然后返回entry
  * T = O(N)
  */
 dictEntry *dictReplaceRaw(dict *d, void *key) {
@@ -637,11 +615,9 @@ dictEntry *dictReplaceRaw(dict *d, void *key) {
 
 /* Search and remove an element */
 /*
- * 查找并删除包含给定键的节点
- *
+ * 查找并删除包含给定键的节点（会执行单步rehash）
  * 参数 nofree 决定是否调用键和值的释放函数
  * 0 表示调用，1 表示不调用
- *
  * 找到并成功删除返回 DICT_OK ，没找到则返回 DICT_ERR
  *
  * T = O(1)
@@ -680,11 +656,13 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
                 /* Unlink the element from the list */
                 // 从链表中删除
                 if (prevHe)
+                    //此时目标节点有previous节点
                     prevHe->next = he->next;
                 else
+                    //此时目标节点就是链表的头节点
                     d->ht[table].table[idx] = he->next;
 
-                // 释放调用键和值的释放函数？
+                // nofree=0，那么释放键、值
                 if (!nofree) {
                     dictFreeKey(d, he);
                     dictFreeVal(d, he);
@@ -703,9 +681,8 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
             prevHe = he;
             he = he->next;
         }
-
-        // 如果执行到这里，说明在 0 号哈希表中找不到给定键
-        // 那么根据字典是否正在进行 rehash ，决定要不要查找 1 号哈希表
+        
+        //如果没有在rehash，那么1号哈希表是空的，也就不用找了直接跳出循环；如果在rehash，那么继续在1号哈希表中查找
         if (!dictIsRehashing(d)) break;
     }
 
@@ -714,10 +691,7 @@ static int dictGenericDelete(dict *d, const void *key, int nofree)
 }
 
 /*
- * 从字典中删除包含给定键的节点
- * 
- * 并且调用键值的释放函数来删除键值
- *
+ * 从字典中删除包含给定键的节点并释放键、值
  * 找到并成功删除返回 DICT_OK ，没找到则返回 DICT_ERR
  * T = O(1)
  */
@@ -726,10 +700,7 @@ int dictDelete(dict *ht, const void *key) {
 }
 
 /*
- * 从字典中删除包含给定键的节点
- * 
- * 但不调用键值的释放函数来删除键值
- *
+ * 从字典中删除包含给定键的节点，但不释放键值
  * 找到并成功删除返回 DICT_OK ，没找到则返回 DICT_ERR
  * T = O(1)
  */
