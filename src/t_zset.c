@@ -194,17 +194,15 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
     // 在各个层查找节点的插入位置
     // T_wrost = O(N^2), T_avg = O(N log N)
     x = zsl->header;
-    for (i = zsl->level-1; i >= 0; i--) {
+    for (i = zsl->level-1; i >= 0; i--) {//从最高层开始
 
         /* store rank that is crossed to reach the insert position */
-        // 如果 i 不是 zsl->level-1 层
-        // 那么 i 层的起始 rank 值为 i+1 层的 rank 值
-        // 各个层的 rank 值一层层累积
-        // 最终 rank[0] 的值加一就是新节点的前置节点的排位
+        // 如果 i 不是 zsl->level-1 层，那么 i 层的起始 rank 值为 i+1 层的 rank 值
+        // 各个层的 rank 值一层层累积，最终 rank[0] 的值加一就是新节点的前置节点的排位
         // rank[0] 会在后面成为计算 span 值和 rank 值的基础
-        rank[i] = i == (zsl->level-1) ? 0 : rank[i+1];
+        rank[i] = i == (zsl->level-1) ? 0 : rank[i+1]; //如果是最高层，初始设置rank[i]=0，否则初始设置为上个rank[i+1]
 
-        // 沿着前进指针遍历跳跃表
+        // 沿着前进指针遍历跳跃表，如果第i层存在前进节点并且前进节点比当前大，那么继续向前，累加rank[i]
         // T_wrost = O(N^2), T_avg = O(N log N)
         while (x->level[i].forward &&
             (x->level[i].forward->score < score ||
@@ -213,7 +211,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
                 // 比对成员， T = O(N)
                 compareStringObjects(x->level[i].forward->obj,obj) < 0))) {
 
-            // 记录沿途跨越了多少个节点
+            // 记录沿途跨越节点的span 
             rank[i] += x->level[i].span;
 
             // 移动至下一指针
@@ -222,6 +220,7 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
         // 记录将要和新节点相连接的节点
         update[i] = x;
     }
+    //这样一个循环下来，插入节点就应该插入update[i]的后面，同时rank[i]记录update[i]节点的排位
 
     /* we assume the key is not already inside, since we allow duplicated
      * scores, and the re-insertion of score and redis object should never
@@ -236,17 +235,16 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
     // T = O(N)
     level = zslRandomLevel();
 
-    // 如果新节点的层数比表中其他节点的层数都要大
-    // 那么初始化表头节点中未使用的层，并将它们记录到 update 数组中
+    // 如果新节点的层数比表中其他节点的层数都要大，那么初始化表头节点中未使用的层，并将它们记录到 update 数组中
     // 将来也指向新节点
     if (level > zsl->level) {
 
         // 初始化未使用层
         // T = O(1)
         for (i = zsl->level; i < level; i++) {
-            rank[i] = 0;
-            update[i] = zsl->header;
-            update[i]->level[i].span = zsl->length;
+            rank[i] = 0; //rank设为0，因为这层只有dummy-head节点
+            update[i] = zsl->header; //前置节点就是头节点
+            update[i]->level[i].span = zsl->length;//前置节点第i层的span是跳跃表长度
         }
 
         // 更新表中节点最大层数
@@ -256,18 +254,17 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
     // 创建新节点
     x = zslCreateNode(level,score,obj);
 
-    // 将前面记录的指针指向新节点，并做相应的设置
+    // 将前面记录的指针指向新节点，并做相应的设置，update[i]表示第i层x的前面一个节点
     // T = O(1)
     for (i = 0; i < level; i++) {
         
-        // 设置新节点的 forward 指针
+        // 设置新节点的 forward 指针指向下个
         x->level[i].forward = update[i]->level[i].forward;
-        
         // 将沿途记录的各个节点的 forward 指针指向新节点
         update[i]->level[i].forward = x;
 
         /* update span covered by update[i] as x is inserted here */
-        // 计算新节点跨越的节点数量
+        // 计算新节点跨越的节点数量 减去rank[0]
         x->level[i].span = update[i]->level[i].span - (rank[0] - rank[i]);
 
         // 更新新节点插入之后，沿途节点的 span 值
@@ -284,9 +281,10 @@ zskiplistNode *zslInsert(zskiplist *zsl, double score, robj *obj) {
 
     // 设置新节点的后退指针
     x->backward = (update[0] == zsl->header) ? NULL : update[0];
-    if (x->level[0].forward)
+    if (x->level[0].forward) //如果第0层x存在下个节点，那么更新下个节点的后退指针
         x->level[0].forward->backward = x;
     else
+        //如果第0层x不存在下个节点，说明x就是尾节点了
         zsl->tail = x;
 
     // 跳跃表的节点计数增一
@@ -309,7 +307,7 @@ void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **update) {
     // T = O(1)
     for (i = 0; i < zsl->level; i++) {
         if (update[i]->level[i].forward == x) {
-            update[i]->level[i].span += x->level[i].span - 1;
+            update[i]->level[i].span += x->level[i].span - 1; //更新update[i]的第i层的span
             update[i]->level[i].forward = x->level[i].forward;
         } else {
             update[i]->level[i].span -= 1;
@@ -361,6 +359,7 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
         // 记录沿途节点
         update[i] = x;
     }
+    //update[i]记录第i层目标节点的前面一个节点
 
     /* We may have multiple elements with the same score, what we need
      * is to find the element with both the right score and object. 
@@ -368,10 +367,11 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
      * 检查找到的元素 x ，只有在它的分值和对象都相同时，才将它删除。
      */
     x = x->level[0].forward;
+    //score相同并且obj也相同
     if (x && score == x->score && equalStringObjects(x->obj,obj)) {
-        // T = O(1)
+        // T = O(1)//删除x节点
         zslDeleteNode(zsl, x, update);
-        // T = O(1)
+        // T = O(1)释放节点内存
         zslFreeNode(x);
         return 1;
     } else {
@@ -383,9 +383,7 @@ int zslDelete(zskiplist *zsl, double score, robj *obj) {
 
 /*
  * 检测给定值 value 是否大于（或大于等于）范围 spec 中的 min 项。
- *
  * 返回 1 表示 value 大于等于 min 项，否则返回 0 。
- *
  * T = O(1)
  */
 static int zslValueGteMin(double value, zrangespec *spec) {
@@ -414,31 +412,29 @@ int zslIsInRange(zskiplist *zsl, zrangespec *range) {
     zskiplistNode *x;
 
     /* Test for ranges that will always be empty. */
-    // 先排除总为空的范围值
+    // 如果范围为空的，那就不用比较了，直接返回0
     if (range->min > range->max ||
             (range->min == range->max && (range->minex || range->maxex)))
         return 0;
 
     // 检查最大分值
-    x = zsl->tail;
-    if (x == NULL || !zslValueGteMin(x->score,range))
+    x = zsl->tail;//最大的socre
+    if (x == NULL || !zslValueGteMin(x->score,range)) //如果最大的score < range->min，那么肯定不在范围内，返回0
         return 0;
 
     // 检查最小分值
-    x = zsl->header->level[0].forward;
-    if (x == NULL || !zslValueLteMax(x->score,range))
+    x = zsl->header->level[0].forward;//最小的范围内
+    if (x == NULL || !zslValueLteMax(x->score,range)) //如果最小的score > range->max，那么肯定不在范围内，返回0
         return 0;
 
+    //否则range和跳跃表的范围会有交叉
     return 1;
 }
 
 /* Find the first node that is contained in the specified range.
- *
  * 返回 zsl 中第一个分值符合 range 中指定范围的节点。
  * Returns NULL when no element is contained in the range.
- *
  * 如果 zsl 中没有符合范围的节点，返回 NULL 。
- *
  * T_wrost = O(N), T_avg = O(log N)
  */
 zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range) {
@@ -446,16 +442,20 @@ zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range) {
     int i;
 
     /* If everything is out of range, return early. */
+    //如果zsl范围和range范围无交叉，直接返回NULL
     if (!zslIsInRange(zsl,range)) return NULL;
 
     // 遍历跳跃表，查找符合范围 min 项的节点
     // T_wrost = O(N), T_avg = O(log N)
     x = zsl->header;
+    //从最高层往下遍历，
     for (i = zsl->level-1; i >= 0; i--) {
         /* Go forward while *OUT* of range. */
+        //如果存在前进节点，并且前进节点的score < range.min 那么继续前进
         while (x->level[i].forward &&
             !zslValueGteMin(x->level[i].forward->score,range))
                 x = x->level[i].forward;
+        //跳出循环后 肯定节点的score > range.min
     }
 
     /* This is an inner range, so the next node cannot be NULL. */
@@ -463,9 +463,10 @@ zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range) {
     redisAssert(x != NULL);
 
     /* Check if score <= max. */
-    // 检查节点是否符合范围的 max 项
+    // 检查节点是否符合范围的 max 项, 如果当前节点的score > range.max，那么返回NULL
     // T = O(1)
     if (!zslValueLteMax(x->score,range)) return NULL;
+    //走到这里时，x->score > range.min 并且x->score < range.max，所以符合要求
     return x;
 }
 
@@ -473,9 +474,7 @@ zskiplistNode *zslFirstInRange(zskiplist *zsl, zrangespec *range) {
  * Returns NULL when no element is contained in the range.
  *
  * 返回 zsl 中最后一个分值符合 range 中指定范围的节点。
- *
  * 如果 zsl 中没有符合范围的节点，返回 NULL 。
- *
  * T_wrost = O(N), T_avg = O(log N)
  */
 zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
@@ -483,8 +482,7 @@ zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
     int i;
 
     /* If everything is out of range, return early. */
-    // 先确保跳跃表中至少有一个节点符合 range 指定的范围，
-    // 否则直接失败
+    // 先确保跳跃表中至少有一个节点符合 range 指定的范围，否则直接失败
     // T = O(1)
     if (!zslIsInRange(zsl,range)) return NULL;
 
@@ -493,10 +491,12 @@ zskiplistNode *zslLastInRange(zskiplist *zsl, zrangespec *range) {
     x = zsl->header;
     for (i = zsl->level-1; i >= 0; i--) {
         /* Go forward while *IN* range. */
+        //如果score < range->max就继续前进
         while (x->level[i].forward &&
             zslValueLteMax(x->level[i].forward->score,range))
                 x = x->level[i].forward;
     }
+    //走到这里，会找到第一个节点它的score >= range->max
 
     /* This is an inner range, so this node cannot be NULL. */
     redisAssert(x != NULL);
@@ -667,12 +667,9 @@ unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, unsigned 
  * 查找包含给定分值和成员对象的节点在跳跃表中的排位。
  *
  * Returns 0 when the element cannot be found, rank otherwise.
- *
  * 如果没有包含给定分值和成员对象的节点，返回 0 ，否则返回排位。
- *
  * Note that the rank is 1-based due to the span of zsl->header to the
  * first element. 
- *
  * 注意，因为跳跃表的表头也被计算在内，所以返回的排位以 1 为起始值。
  *
  * T_wrost = O(N), T_avg = O(log N)
@@ -728,6 +725,7 @@ zskiplistNode* zslGetElementByRank(zskiplist *zsl, unsigned long rank) {
 
     // T_wrost = O(N), T_avg = O(log N)
     x = zsl->header;
+    //从最高层遍历到最低层，肯定能在某一层找到traversed == rank的节点（如果rank是合法的话）
     for (i = zsl->level-1; i >= 0; i--) {
 
         // 遍历跳跃表并累积越过的节点数量
