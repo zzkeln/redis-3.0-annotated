@@ -700,6 +700,7 @@ unsigned long zslGetRank(zskiplist *zsl, double score, robj *o) {
 
         /* x might be equal to zsl->header, so test if obj is non-NULL */
         // 必须确保不仅分值相等，而且成员对象也要相等
+        //这里有点bug吧？应该加上score相等的判断才行
         // T = O(N)
         if (x->obj && equalStringObjects(x->obj,o)) {
             return rank;
