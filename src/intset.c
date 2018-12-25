@@ -286,8 +286,7 @@ static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
  * 向前或先后移动指定索引范围内的数组元素
  *
  * 函数名中的 MoveTail 其实是一个有误导性的名字，
- * 这个函数可以向前或向后移动元素，
- * 而不仅仅是向后
+ * 这个函数可以向前或向后移动元素，而不仅仅是向后
  *
  * 在添加新元素到数组时，就需要进行向后移动，
  * 如果数组表示如下（？表示一个未设置新值的空间）：
@@ -311,6 +310,7 @@ static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
  * | a | c | d |
  * 这样就完成了删除操作。
  *
+ *将from开始到结尾的元素移动到to位置处，调用memmove按照字节来移动
  * T = O(N)
  */
 static void intsetMoveTail(intset *is, uint32_t from, uint32_t to) {
@@ -347,9 +347,7 @@ static void intsetMoveTail(intset *is, uint32_t from, uint32_t to) {
 }
 
 /* Insert an integer in the intset 
- * 
  * 尝试将元素 value 添加到整数集合中。
- *
  * *success 的值指示添加是否成功：
  * - 如果添加成功，那么将 *success 的值设为 1 。
  * - 因为元素已存在而造成添加失败时，将 *success 的值设为 0 。
@@ -368,8 +366,7 @@ intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
     /* Upgrade encoding if necessary. If we need to upgrade, we know that
      * this value should be either appended (if > 0) or prepended (if < 0),
      * because it lies outside the range of existing values. */
-    // 如果 value 的编码比整数集合现在的编码要大
-    // 那么表示 value 必然可以添加到整数集合中
+    // 如果 value 的编码比整数集合现在的编码要大，那么表示 value 必然可以添加到整数集合中
     // 并且整数集合需要对自身进行升级，才能满足 value 所需的编码
     if (valenc > intrev32ifbe(is->encoding)) {
         /* This always succeeds, so we don't need to curry *success. */
@@ -384,7 +381,6 @@ intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
         // 在整数集合中查找 value ，看他是否存在：
         // - 如果存在，那么将 *success 设置为 0 ，并返回未经改动的整数集合
         // - 如果不存在，那么可以插入 value 的位置将被保存到 pos 指针中
-        //   等待后续程序使用
         if (intsetSearch(is,value,&pos)) {
             if (success) *success = 0;
             return is;
@@ -392,7 +388,6 @@ intset *intsetAdd(intset *is, int64_t value, uint8_t *success) {
 
         // 运行到这里，表示 value 不存在于集合中
         // 程序需要将 value 添加到整数集合中
-    
         // 为 value 在集合中分配空间
         is = intsetResize(is,intrev32ifbe(is->length)+1);
         // 如果新元素不是被添加到底层数组的末尾
@@ -494,30 +489,20 @@ intset *intsetRemove(intset *is, int64_t value, int *success) {
 }
 
 /* Determine whether a value belongs to this set 
- *
- * 检查给定值 value 是否集合中的元素。
- *
- * 是返回 1 ，不是返回 0 。
- *
+ * 检查给定值 value 是否集合中的元素。是返回 1 ，不是返回 0 。
  * T = O(log N)
  */
 uint8_t intsetFind(intset *is, int64_t value) {
-
     // 计算 value 的编码
     uint8_t valenc = _intsetValueEncoding(value);
-
     // 如果 value 的编码大于集合的当前编码，那么 value 一定不存在于集合
-    // 当 value 的编码小于等于集合的当前编码时，
-    // 才再使用 intsetSearch 进行查找
+    // 当 value 的编码小于等于集合的当前编码时，才再使用 intsetSearch 进行查找
     return valenc <= intrev32ifbe(is->encoding) && intsetSearch(is,value,NULL);
 }
 
 /* Return random member 
  *
- * 从整数集合中随机返回一个元素
- *
- * 只能在集合非空时使用
- *
+ * 从整数集合中随机返回一个元素，只能在集合非空时使用
  * T = O(1)
  */
 int64_t intsetRandom(intset *is) {
@@ -533,24 +518,18 @@ int64_t intsetRandom(intset *is) {
  * 取出集合底层数组指定位置中的值，并将它保存到 value 指针中。
  *
  * 如果 pos 没超出数组的索引范围，那么返回 1 ，如果超出索引，那么返回 0 。
- *
  * p.s. 上面原文的文档说这个函数用于设置值，这是错误的。
- *
  * T = O(1)
  */
 uint8_t intsetGet(intset *is, uint32_t pos, int64_t *value) {
-
     // pos < intrev32ifbe(is->length) 
     // 检查 pos 是否符合数组的范围
     if (pos < intrev32ifbe(is->length)) {
-
         // 保存值到指针
         *value = _intsetGet(is,pos);
-
         // 返回成功指示值
         return 1;
     }
-
     // 超出索引范围
     return 0;
 }
@@ -569,7 +548,6 @@ uint32_t intsetLen(intset *is) {
  *
  * 返回整数集合现在占用的字节总数量
  * 这个数量包括整数集合的结构大小，以及整数集合所有元素的总大小
- *
  * T = O(1)
  */
 size_t intsetBlobLen(intset *is) {
@@ -623,7 +601,7 @@ intset *createSet(int bits, int size) {
     }
     return is;
 }
-
+//这是检查有序性，当前元素必须要小于下个元素
 void checkConsistency(intset *is) {
     int i;
 
