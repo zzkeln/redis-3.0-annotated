@@ -40,7 +40,7 @@ typedef struct intset {
     // 集合包含的元素数量
     uint32_t length;
 
-    // 保存元素的数组
+    // 保存元素的数组，柔性数组，如果编码是int32_t，取出pos处元素可这样((int32_t*)intset->contents)[pos]
     int8_t contents[];
 
 } intset;
