@@ -45,9 +45,7 @@
 #define INTSET_ENC_INT64 (sizeof(int64_t))
 
 /* Return the required encoding for the provided value. 
- *
- * 返回适用于传入值 v 的编码方式
- *
+ * 返回适用于v的编码方式
  * T = O(1)
  */
 static uint8_t _intsetValueEncoding(int64_t v) {
@@ -60,9 +58,7 @@ static uint8_t _intsetValueEncoding(int64_t v) {
 }
 
 /* Return the value at pos, given an encoding. 
- *
  * 根据给定的编码方式 enc ，返回集合的底层数组在 pos 索引上的元素。
- *
  * T = O(1)
  */
 static int64_t _intsetGetEncoded(intset *is, int pos, uint8_t enc) {
@@ -72,13 +68,13 @@ static int64_t _intsetGetEncoded(intset *is, int pos, uint8_t enc) {
 
     // ((ENCODING*)is->contents) 首先将数组转换回被编码的类型
     // 然后 ((ENCODING*)is->contents)+pos 计算出元素在数组中的正确位置
-    // 之后 member(&vEnc, ..., sizeof(vEnc)) 再从数组中拷贝出正确数量的字节
+    // 之后 memcpy(&vEnc, ..., sizeof(vEnc)) 再从数组中拷贝出正确数量的字节
     // 如果有需要的话， memrevEncifbe(&vEnc) 会对拷贝出的字节进行大小端转换
     // 最后将值返回
     if (enc == INTSET_ENC_INT64) {
-        memcpy(&v64,((int64_t*)is->contents)+pos,sizeof(v64));
-        memrev64ifbe(&v64);
-        return v64;
+        memcpy(&v64,((int64_t*)is->contents)+pos,sizeof(v64)); //取出pos位置处字节到v64处
+        memrev64ifbe(&v64);//进行大小端转换如果有需要的话
+        return v64;//返回结果
     } else if (enc == INTSET_ENC_INT32) {
         memcpy(&v32,((int32_t*)is->contents)+pos,sizeof(v32));
         memrev32ifbe(&v32);
@@ -91,9 +87,7 @@ static int64_t _intsetGetEncoded(intset *is, int pos, uint8_t enc) {
 }
 
 /* Return the value at pos, using the configured encoding. 
- *
  * 根据集合的编码方式，返回底层数组在 pos 索引上的值
- *
  * T = O(1)
  */
 static int64_t _intsetGet(intset *is, int pos) {
@@ -101,24 +95,20 @@ static int64_t _intsetGet(intset *is, int pos) {
 }
 
 /* Set the value at pos, using the configured encoding. 
- *
  * 根据集合的编码方式，将底层数组在 pos 位置上的值设为 value 。
- *
  * T = O(1)
  */
 static void _intsetSet(intset *is, int pos, int64_t value) {
-
     // 取出集合的编码方式
     uint32_t encoding = intrev32ifbe(is->encoding);
-
     // 根据编码 ((Enc_t*)is->contents) 将数组转换回正确的类型
     // 然后 ((Enc_t*)is->contents)[pos] 定位到数组索引上
     // 接着 ((Enc_t*)is->contents)[pos] = value 将值赋给数组
     // 最后， ((Enc_t*)is->contents)+pos 定位到刚刚设置的新值上 
     // 如果有需要的话， memrevEncifbe 将对值进行大小端转换
     if (encoding == INTSET_ENC_INT64) {
-        ((int64_t*)is->contents)[pos] = value;
-        memrev64ifbe(((int64_t*)is->contents)+pos);
+        ((int64_t*)is->contents)[pos] = value;//设置新值
+        memrev64ifbe(((int64_t*)is->contents)+pos);//进行大小端转换如果有需要的话
     } else if (encoding == INTSET_ENC_INT32) {
         ((int32_t*)is->contents)[pos] = value;
         memrev32ifbe(((int32_t*)is->contents)+pos);
@@ -129,89 +119,67 @@ static void _intsetSet(intset *is, int pos, int64_t value) {
 }
 
 /* Create an empty intset. 
- *
- * 创建并返回一个新的空整数集合
- *
+ * 创建并返回一个新的空整数集合，初始编码是int16_t
  * T = O(1)
  */
 intset *intsetNew(void) {
-
     // 为整数集合结构分配空间
     intset *is = zmalloc(sizeof(intset));
-
     // 设置初始编码
     is->encoding = intrev32ifbe(INTSET_ENC_INT16);
-
     // 初始化元素数量
     is->length = 0;
-
     return is;
 }
 
 /* Resize the intset 
  *
- * 调整整数集合的内存空间大小
- *
- * 如果调整后的大小要比集合原来的大小要大，
- * 那么集合中原有元素的值不会被改变。
- *
+ * 调整整数集合的内存空间大小，只调整内存大小，不移动元素位置，由上游来移动日志
  * 返回值：调整大小后的整数集合
  *
  * T = O(N)
  */
 static intset *intsetResize(intset *is, uint32_t len) {
-
     // 计算数组的空间大小
     uint32_t size = len*intrev32ifbe(is->encoding);
-
-    // 根据空间大小，重新分配空间
-    // 注意这里使用的是 zrealloc ，
-    // 所以如果新空间大小比原来的空间大小要大，
-    // 那么数组原有的数据会被保留
+    //重新分配内存，内存大小是intset大小和数组需要的大小
     is = zrealloc(is,sizeof(intset)+size);
 
     return is;
 }
 
 /* Search for the position of "value".
- * 
  * 在集合 is 的底层数组中查找值 value 所在的索引。
- *
  * Return 1 when the value was found and 
  * sets "pos" to the position of the value within the intset. 
- *
  * 成功找到 value 时，函数返回 1 ，并将 *pos 的值设为 value 所在的索引。
- *
  * Return 0 when the value is not present in the intset 
  * and sets "pos" to the position where "value" can be inserted. 
- *
  * 当在数组中没找到 value 时，返回 0 。
  * 并将 *pos 的值设为 value 可以插入到数组中的位置。
  *
- * T = O(log N)
+ * T = O(log N)，二分查找
  */
 static uint8_t intsetSearch(intset *is, int64_t value, uint32_t *pos) {
     int min = 0, max = intrev32ifbe(is->length)-1, mid = -1;
     int64_t cur = -1;
 
     /* The value can never be found when the set is empty */
-    // 处理 is 为空时的情况
+    // 处理数组为空的情况
     if (intrev32ifbe(is->length) == 0) {
         if (pos) *pos = 0;
         return 0;
     } else {
+        //处理不在数组中的情况，因为数组有序
         /* Check for the case where we know we cannot find the value,
          * but do know the insert position. */
-        // 因为底层数组是有序的，如果 value 比数组中最后一个值都要大
-        // 那么 value 肯定不存在于集合中，
-        // 并且应该将 value 添加到底层数组的最末端
+        // 底层数组是有序的
+        //如果value比数组最后一个元素大，那么放在数组最后位置即length处（value肯定不在数组中）
         if (value > _intsetGet(is,intrev32ifbe(is->length)-1)) {
             if (pos) *pos = intrev32ifbe(is->length);
             return 0;
-        // 因为底层数组是有序的，如果 value 比数组中最前一个值都要小
-        // 那么 value 肯定不存在于集合中，
-        // 并且应该将它添加到底层数组的最前端
         } else if (value < _intsetGet(is,0)) {
+            //如果value比数组第一个元素小，那么value应该放在0处（value肯定不在数组中）
             if (pos) *pos = 0;
             return 0;
         }
@@ -242,22 +210,15 @@ static uint8_t intsetSearch(intset *is, int64_t value, uint32_t *pos) {
 }
 
 /* Upgrades the intset to a larger encoding and inserts the given integer. 
- *
- * 根据值 value 所使用的编码方式，对整数集合的编码进行升级，
- * 并将值 value 添加到升级后的整数集合中。
- *
+ * 根据值 value 所使用的编码方式，对整数集合的编码进行升级，并将值 value 添加到升级后的整数集合中。
  * 返回值：添加新元素之后的整数集合
- *
  * T = O(N)
  */
 static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
-    
     // 当前的编码方式
     uint8_t curenc = intrev32ifbe(is->encoding);
-
     // 新值所需的编码方式
     uint8_t newenc = _intsetValueEncoding(value);
-
     // 当前集合的元素数量
     int length = intrev32ifbe(is->length);
 
@@ -265,12 +226,13 @@ static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
     // 注意，因为 value 的编码比集合原有的其他元素的编码都要大
     // 所以 value 要么大于集合中的所有元素，要么小于集合中的所有元素
     // 因此，value 只能添加到底层数组的最前端或最后端
+    //这里是不是bug？？？为啥判断是否小于0，应该和数组中的元素进行对比
     int prepend = value < 0 ? 1 : 0;
 
     /* First set new encoding and resize */
     // 更新集合的编码方式
     is->encoding = intrev32ifbe(newenc);
-    // 根据新编码对集合（的底层数组）进行空间调整
+    // 根据新编码对集合（的底层数组）进行空间调整，分配length+1个元素需要的内存空间（注意，这里并没有预分配多余的内存空间）
     // T = O(N)
     is = intsetResize(is,intrev32ifbe(is->length)+1);
 
@@ -300,14 +262,18 @@ static intset *intsetUpgradeAndAdd(intset *is, int64_t value) {
     // 当添加新值时，原本的 | x | y | 的数据将被新值代替
     // |  new  |   x   |   y   |   z   |
     // T = O(N)
+    //因为realloc分配内存，所以原来的内存结构并未改变
     while(length--)
+        //intsetGetEncoded按照原来的编码获得length处的元素，然后按照新编码方式放在length+prepend处
         _intsetSet(is,length+prepend,_intsetGetEncoded(is,length,curenc));
 
     /* Set the value at the beginning or the end. */
     // 设置新值，根据 prepend 的值来决定是添加到数组头还是数组尾
     if (prepend)
+        //prepend=1，放置在头部
         _intsetSet(is,0,value);
     else
+        //prepend=0，放置在尾部
         _intsetSet(is,intrev32ifbe(is->length),value);
 
     // 更新整数集合的元素数量
