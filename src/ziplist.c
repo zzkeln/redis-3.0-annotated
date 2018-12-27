@@ -173,18 +173,15 @@
 #include "endianconv.h"
 #include "redisassert.h"
 
-/*
- * ziplist 末端标识符，以及 5 字节长长度标识符
- */
-#define ZIP_END 255
-#define ZIP_BIGLEN 254
+#define ZIP_END 255 // ziplist的最后一个标识字节
+#define ZIP_BIGLEN 254 //entry中previous_entry_length的5字节标识
 
 /* Different encoding/length possibilities */
 /*
  * 字符串编码和整数编码的掩码
  */
-#define ZIP_STR_MASK 0xc0
-#define ZIP_INT_MASK 0x30
+#define ZIP_STR_MASK 0xc0 //0x1100 0000 
+#define ZIP_INT_MASK 0x30 //0x0011 0000
 
 /*
  * 字符串编码类型
@@ -203,12 +200,11 @@
 #define ZIP_INT_8B 0xfe
 
 /* 4 bit integer immediate encoding 
- *
  * 4 位整数编码的掩码和类型
  */
 #define ZIP_INT_IMM_MASK 0x0f
-#define ZIP_INT_IMM_MIN 0xf1    /* 11110001 */
-#define ZIP_INT_IMM_MAX 0xfd    /* 11111101 */
+#define ZIP_INT_IMM_MIN 0xf1    /* 11110001 */ //对应0001 即1
+#define ZIP_INT_IMM_MAX 0xfd    /* 11111101 */ //对应1101 即13
 #define ZIP_INT_IMM_VAL(v) (v & ZIP_INT_IMM_MASK)
 
 /*
@@ -219,7 +215,8 @@
 
 /* Macro to determine type 
  *
- * 查看给定编码 enc 是否字符串编码
+ * 查看给定编码 enc 是否字符串编码，将enc和0x1100 0000取与，
+ * 取与后如果小于0x11000000就说明是0x00..或0x01..或0x10...说明是字符串编码
  */
 #define ZIP_IS_STR(enc) (((enc) & ZIP_STR_MASK) < ZIP_STR_MASK)
 
@@ -236,13 +233,13 @@
 // 定位到 ziplist 的 length 属性，该属性记录了 ziplist 包含的节点数量
 // 用于取出 length 属性的现有值，或者为 length 属性赋予新值
 #define ZIPLIST_LENGTH(zl)      (*((uint16_t*)((zl)+sizeof(uint32_t)*2)))
-// 返回 ziplist 表头的大小
+// 返回 ziplist 表头的大小，包含bytes+tail+length，其中bytes和tail是4字节的uint32_t，length是2字节的uint16_t，共10字节
 #define ZIPLIST_HEADER_SIZE     (sizeof(uint32_t)*2+sizeof(uint16_t))
-// 返回指向 ziplist 第一个节点（的起始位置）的指针
+// 返回指向 ziplist 第一个节点（的起始位置）的指针，就是ziplist的起始地址跳过10字节的bytes+tail+length
 #define ZIPLIST_ENTRY_HEAD(zl)  ((zl)+ZIPLIST_HEADER_SIZE)
-// 返回指向 ziplist 最后一个节点（的起始位置）的指针
+// 返回指向 ziplist 最后一个节点（的起始位置）的指针，就是ziplist的起始地址+tail值
 #define ZIPLIST_ENTRY_TAIL(zl)  ((zl)+intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl)))
-// 返回指向 ziplist 末端 ZIP_END （的起始位置）的指针
+// 返回指向 ziplist 末端 ZIP_END （的起始位置）的指针，就是最后一个字节flag的起始地址
 #define ZIPLIST_ENTRY_END(zl)   ((zl)+intrev32ifbe(ZIPLIST_BYTES(zl))-1)
 
 /* 
@@ -274,7 +271,7 @@ component   | zlbytes | zltail | zllen | entry1 | entry2 |  ...   | entryN | zle
             +---------+--------+-------+--------+--------+--------+--------+-------+
                                        ^                          ^        ^
 address                                |                          |        |
-                                ZIPLIST_ENTRY_HEAD                |   ZIPLIST_ENTRY_END
+                                ZIPLIST_ENTRY_HEAD=10字节               |   ZIPLIST_ENTRY_END
                                                                   |
                                                         ZIPLIST_ENTRY_TAIL
 */
