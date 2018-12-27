@@ -464,7 +464,8 @@ static unsigned int zipPrevEncodeLength(unsigned char *p, unsigned int len) {
 
 /* Encode the length of the previous entry and write it to "p". This only
  * uses the larger encoding (required in __ziplistCascadeUpdate). 
- * 将前置节点长度len按照5字节编码写入p中
+ * 虽然len < 254，仅需要1字节就够，但仍然将len作为大于254的形式来记录在p中。
+ 这样会将前置节点长度len按照5字节编码写入p中
  * T = O(1)
  */
 static void zipPrevEncodeLengthForceLarge(unsigned char *p, unsigned int len) {
@@ -812,11 +813,13 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
             p = zl+offset;
 
             /* Current pointer and offset for next element. */
-            // 记录下一节点的偏移量
+            // 记录下一节点的起始地址
             np = p+rawlen;
-            noffset = np-zl;
+            noffset = np-zl;//下个节点距离表首的偏移量
 
             /* Update tail offset when next element is not the tail element. */
+            //当调用ziplistResize后，ziplist的头4字节记录ziplist大小和表尾flag已经更新完了
+            //表尾tail还未更新，如果next节点就是表尾节点，那么这个节点到表首的偏移量tail不用更新，否则需要更新
             // 当 next 节点不是表尾节点时，更新列表到表尾节点的偏移量
             // 
             // 不用更新的情况（next 为表尾节点）：
@@ -840,6 +843,7 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
             //                     |
             //                  new tail
             // T = O(1)
+            //当zl+原来表尾节点偏移量不等于np，说明next节点不是表尾节点，那么更新表尾tail
             if ((zl+intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))) != np) {
                 ZIPLIST_TAIL_OFFSET(zl) =
                     intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))+extra);
@@ -853,6 +857,9 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
             // | header | value |  ==>  | header |    | value |  ==>  | header      | value |
             //                                   |<-->|
             //                            为新 header 腾出的空间
+            //np+next.prevrawlensize即下个节点encoding开始的地址
+            // curlen-noffset等于下个节点开始到表尾的长度，再减去(next.prevrawlensize-1)，即减去下个节点previous_entry_length长度和表尾flag长度
+            //将它们移动到np+rawlensize处即腾开4字节
             // T = O(N)
             memmove(np+rawlensize,
                 np+next.prevrawlensize,
@@ -869,12 +876,11 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
             if (next.prevrawlensize > rawlensize) {
                 /* This would result in shrinking, which we want to avoid.
                  * So, set "rawlen" in the available bytes. */
-                // 执行到这里，说明 next 节点编码前置节点的 header 空间有 5 字节
-                // 而编码 rawlen 只需要 1 字节
+                // 执行到这里，说明 next 节点编码前置节点的 header 空间有 5 字节， 而编码 rawlen 只需要 1 字节
                 // 但是程序不会对 next 进行缩小，
                 // 所以这里只将 rawlen 写入 5 字节的 header 中就算了。
                 // T = O(1)
-                zipPrevEncodeLengthForceLarge(p+rawlen,rawlen);
+                zipPrevEncodeLenghLarge(p+rawlen,rawlen);
             } else {
                 // 运行到这里，
                 // 说明 cur 节点的长度正好可以编码到 next 节点的 header 中
