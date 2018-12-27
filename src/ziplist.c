@@ -689,7 +689,7 @@ static zlentry zipEntry(unsigned char *p) {
 }
 
 /* Create a new empty ziplist. 
- * 创建并返回一个新的 ziplist，一个ziplist就用unsigned char*来表示
+ * 创建并返回一个新的 ziplist，一个ziplist就用unsigned char*来表示，节点数为0是空的ziplist
  * T = O(1)
  */
 unsigned char *ziplistNew(void) {
@@ -712,22 +712,17 @@ unsigned char *ziplistNew(void) {
 }
 
 /* Resize the ziplist. 
- *
- * 调整 ziplist 的大小为 len 字节。
- *
- * 当 ziplist 原有的大小小于 len 时，扩展 ziplist 不会改变 ziplist 原有的元素。
- *
+ * 调整 ziplist 的大小为 len 字节。 调用zrealloc重新分配内存
  * T = O(N)
  */
 static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
-
     // 用 zrealloc ，扩展时不改变现有元素
     zl = zrealloc(zl,len);
 
-    // 更新 bytes 属性
+    // 更新 bytes 属性为len
     ZIPLIST_BYTES(zl) = intrev32ifbe(len);
 
-    // 重新设置表末端
+    // 重新设置表末端flag字节
     zl[len-1] = ZIP_END;
 
     return zl;
@@ -747,10 +742,8 @@ static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
  * 当将一个新节点添加到某个节点之前的时候，
  * 如果原节点的 header 空间不足以保存新节点的长度，
  * 那么就需要对原节点的 header 空间进行扩展（从 1 字节扩展到 5 字节）。
- *
  * 但是，当对原节点进行扩展之后，原节点的下一个节点的 prevlen 可能出现空间不足，
  * 这种情况在多个连续节点的长度都接近 ZIP_BIGLEN 时可能发生。
- *
  * 这个函数就用于检查并修复后续节点的空间问题。
  *
  * Note that this effect can also happen in reverse, where the bytes required
@@ -760,8 +753,7 @@ static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
  * field is allowed to stay larger than necessary, because a large prevlen
  * field implies the ziplist is holding large entries anyway.
  *
- * 反过来说，
- * 因为节点的长度变小而引起的连续缩小也是可能出现的，
+ * 反过来说，因为节点的长度变小而引起的连续缩小也是可能出现的，
  * 不过，为了避免扩展-缩小-扩展-缩小这样的情况反复出现（flapping，抖动），
  * 我们不处理这种情况，而是任由 prevlen 比所需的长度更长。
  
@@ -774,7 +766,7 @@ static unsigned char *ziplistResize(unsigned char *zl, unsigned int len) {
  * T = O(N^2)
  */
 static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p) {
-    size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), rawlen, rawlensize;
+    size_t curlen = intrev32ifbe(ZIPLIST_BYTES(zl)), rawlen, rawlensize;//curlen表示ziplist内存大小
     size_t offset, noffset, extra;
     unsigned char *np;
     zlentry cur, next;
@@ -786,12 +778,12 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
         cur = zipEntry(p);
         // 当前节点的长度
         rawlen = cur.headersize + cur.len;
-        // 计算编码当前节点的长度所需的字节数
+        // 计算编码当前节点的长度所需的字节数：1或5字节
         // T = O(1)
         rawlensize = zipPrevEncodeLength(NULL,rawlen);
 
         /* Abort if there is no next entry. */
-        // 如果已经没有后续空间需要更新了，跳出
+        // 如果当前节点已经是最后一个节点了，那么退出
         if (p[rawlen] == ZIP_END) break;
 
         // 取出后续节点的信息，保存到 next 结构中
@@ -799,23 +791,21 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
         next = zipEntry(p+rawlen);
 
         /* Abort when "prevlen" has not changed. */
-        // 后续节点编码当前节点的空间已经足够，无须再进行任何处理，跳出
-        // 可以证明，只要遇到一个空间足够的节点，
-        // 那么这个节点之后的所有节点的空间都是足够的
+        //如果当前节点长度和下个节点记录的前节点长度一样，那么啥都不用做，跳出循环
         if (next.prevrawlen == rawlen) break;
 
+        //如果下个节点仅有1字节来记录当前节点长度，而当前节点需要5字节的话
         if (next.prevrawlensize < rawlensize) {
-
             /* The "prevlen" field of "next" needs more bytes to hold
              * the raw length of "cur". */
-            // 执行到这里，表示 next 空间的大小不足以编码 cur 的长度
+            // 执行到这里，表示下个节点的previous_entry_length的大小不足以编码当前节点的长度
             // 所以程序需要对 next 节点的（header 部分）空间进行扩展
 
             // 记录 p 的偏移量
             offset = p-zl;
-            // 计算需要增加的节点数量
+            // 计算需要增加的字节大小（应该是5-1=4）
             extra = rawlensize-next.prevrawlensize;
-            // 扩展 zl 的大小
+            // 扩展 zl 的大小，将ziplist内存大小扩展为curlen+extra
             // T = O(N)
             zl = ziplistResize(zl,curlen+extra);
             // 还原指针 p
