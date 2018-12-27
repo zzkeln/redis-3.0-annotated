@@ -689,19 +689,18 @@ static zlentry zipEntry(unsigned char *p) {
 }
 
 /* Create a new empty ziplist. 
- * 创建并返回一个新的 ziplist 
+ * 创建并返回一个新的 ziplist，一个ziplist就用unsigned char*来表示
  * T = O(1)
  */
 unsigned char *ziplistNew(void) {
 
-    // ZIPLIST_HEADER_SIZE 是 ziplist 表头的大小
-    // 1 字节是表末端 ZIP_END 的大小
+    // ZIPLIST_HEADER_SIZE 是 ziplist 表头的大小， 1 字节是表末端 ZIP_END 的大小
     unsigned int bytes = ZIPLIST_HEADER_SIZE+1;
 
     // 为表头和表末端分配空间
     unsigned char *zl = zmalloc(bytes);
 
-    // 初始化表属性
+    // 初始化表属性，设置ziplist整个大小，尾节点偏移量，和节点个数
     ZIPLIST_BYTES(zl) = intrev32ifbe(bytes);
     ZIPLIST_TAIL_OFFSET(zl) = intrev32ifbe(ZIPLIST_HEADER_SIZE);
     ZIPLIST_LENGTH(zl) = 0;
