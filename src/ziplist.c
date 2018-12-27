@@ -277,10 +277,9 @@ address                                |                          |        |
 */
 
 /* We know a positive increment can only be 1 because entries can only be
- * pushed one at a time. */
-/*
- * 增加 ziplist 的节点数
- *
+ * pushed one at a time. 
+ * 增加 ziplist 的节点数，如果当前节点数小于UINT16_MAX，那么就累加incr
+ * 因为ziplist是一个个添加的。所以incr=1，所以不用考虑累加后超过UINT16_MAX的情况
  * T = O(1)
  */
 #define ZIPLIST_INCR_LENGTH(zl,incr) { \
@@ -326,69 +325,63 @@ typedef struct zlentry {
 } while(0)
 
 /* Return bytes needed to store integer encoded by 'encoding' 
- *
- * 返回保存 encoding 编码的值所需的字节数量
- *
+ * 返回encoding编码类型对应整数content所占的字节数
  * T = O(1)
  */
 static unsigned int zipIntSize(unsigned char encoding) {
 
     switch(encoding) {
-    case ZIP_INT_8B:  return 1;
+    case ZIP_INT_8B:  return 1; //content需要1字节
     case ZIP_INT_16B: return 2;
     case ZIP_INT_24B: return 3;
     case ZIP_INT_32B: return 4;
-    case ZIP_INT_64B: return 8;
-    default: return 0; /* 4 bit immediate */
+    case ZIP_INT_64B: return 8;//content需要8字节
+    default: return 0; /* 4 bit immediate */ //content需要0字节，内容直接保存在encoding的后4位中
     }
-
     assert(NULL);
     return 0;
 }
 
 /* Encode the length 'l' writing it in 'p'. If p is NULL it just returns
  * the amount of bytes required to encode such a length. 
- *
- * 编码节点长度值 l ，并将它写入到 p 中，然后返回编码 l 所需的字节数量。
- *
- * 如果 p 为 NULL ，那么仅返回编码 l 所需的字节数量，不进行写入。
- *
+ * 将encoding写入p中。如果encoding是字节数组，那么字节数组长度是rawlen，需要将encoding和rawlen一起写入p中
+ * 否则是整数，将encoding直接写入p中
  * T = O(1)
  */
 static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, unsigned int rawlen) {
     unsigned char len = 1, buf[5];
 
-    // 编码字符串
+    // 如果encoding表示是字节数组
     if (ZIP_IS_STR(encoding)) {
         /* Although encoding is given it may not be set for strings,
          * so we determine it here using the raw length. */
-        if (rawlen <= 0x3f) {
+        if (rawlen <= 0x3f) { //如果rawlen <= 63，说明是0x00...，1字节就够了
             if (!p) return len;
-            buf[0] = ZIP_STR_06B | rawlen;
-        } else if (rawlen <= 0x3fff) {
-            len += 1;
+            buf[0] = ZIP_STR_06B | rawlen; //将0x0000 0000 | rawlen，然后保存在buf[0]中
+        } else if (rawlen <= 0x3fff) { //如果rawlen <= 16383,说明是01bbbbbb xxxxxxxx，需要2字节
+            len += 1; //len=2 encoding是2字节
             if (!p) return len;
-            buf[0] = ZIP_STR_14B | ((rawlen >> 8) & 0x3f);
-            buf[1] = rawlen & 0xff;
+            buf[0] = ZIP_STR_14B | ((rawlen >> 8) & 0x3f);//(rawlen>>8 & 0x3f)是保留前8位，然后与0x0100 0000进行或，
+                                                          //保留在buf[0]中，就是按照0x1bbbbbb xxxxxxxx这样的格式来保存长度
+            buf[1] = rawlen & 0xff; //buf[1]记录剩下的8位
         } else {
-            len += 4;
+            len += 4; //len=5 编码长度是5字节
             if (!p) return len;
-            buf[0] = ZIP_STR_32B;
-            buf[1] = (rawlen >> 24) & 0xff;
+            buf[0] = ZIP_STR_32B; //前8位是0x1000 0000
+            buf[1] = (rawlen >> 24) & 0xff;//后面4字节是记录rawlen
             buf[2] = (rawlen >> 16) & 0xff;
             buf[3] = (rawlen >> 8) & 0xff;
             buf[4] = rawlen & 0xff;
         }
-
-    // 编码整数
+    // 如果encoding表示整数
     } else {
         /* Implies integer encoding, so length is always 1. */
         if (!p) return len;
-        buf[0] = encoding;
+        buf[0] = encoding; //只需1字节encoding，将encoding保存到buf[0]中
     }
 
     /* Store this length at p */
-    // 将编码后的长度写入 p 
+    //将长度len的buf写入p中，表示将encoding记录到p中 
     memcpy(p,buf,len);
 
     // 返回编码所需的字节数
@@ -401,13 +394,9 @@ static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, un
  * entries length. 
  *
  * 解码 ptr 指针，取出列表节点的相关信息，并将它们保存在以下变量中：
- *
  * - encoding 保存节点值的编码类型。
- *
- * - lensize 保存编码节点长度所需的字节数。
- *
- * - len 保存节点的长度。
- *
+ * - lensize ：encoding需要的字节数，1、2或5字节
+ * - len content的长度
  * T = O(1)
  */
 #define ZIP_DECODE_LENGTH(ptr, encoding, lensize, len) do {                    \
@@ -415,16 +404,16 @@ static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, un
     /* 取出值的编码类型 */                                                     \
     ZIP_ENTRY_ENCODING((ptr), (encoding));                                     \
                                                                                \
-    /* 字符串编码 */                                                           \
+    /* 如果是字符串编码 */                                                           \
     if ((encoding) < ZIP_STR_MASK) {                                           \
         if ((encoding) == ZIP_STR_06B) {                                       \
-            (lensize) = 1;                                                     \
-            (len) = (ptr)[0] & 0x3f;                                           \
+            (lensize) = 1; //encoding需要的字节数是1                                                    \
+            (len) = (ptr)[0] & 0x3f; //字节数组长度                                  \
         } else if ((encoding) == ZIP_STR_14B) {                                \
-            (lensize) = 2;                                                     \
-            (len) = (((ptr)[0] & 0x3f) << 8) | (ptr)[1];                       \
+            (lensize) = 2;//encoding需要的字节数是2                                              \
+            (len) = (((ptr)[0] & 0x3f) << 8) | (ptr)[1]; //字节数组长度                      \
         } else if (encoding == ZIP_STR_32B) {                                  \
-            (lensize) = 5;                                                     \
+            (lensize) = 5;//encoding需要的字节数是5                                                     \
             (len) = ((ptr)[1] << 24) |                                         \
                     ((ptr)[2] << 16) |                                         \
                     ((ptr)[3] <<  8) |                                         \
@@ -435,8 +424,8 @@ static unsigned int zipEncodeLength(unsigned char *p, unsigned char encoding, un
                                                                                \
     /* 整数编码 */                                                             \
     } else {                                                                   \
-        (lensize) = 1;                                                         \
-        (len) = zipIntSize(encoding);                                          \
+        (lensize) = 1; //整数编码那么encoding只需要1字节即可                                                        \
+        (len) = zipIntSize(encoding); //保存这个整数content需要的字节数                                         \
     }                                                                          \
 } while(0);
 
