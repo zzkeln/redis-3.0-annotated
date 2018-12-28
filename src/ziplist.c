@@ -1010,7 +1010,7 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
     if (p[0] != ZIP_END) {
         // 如果 p[0] 不指向列表末端，说明列表非空，并且 p 正指向列表的其中一个节点
         // 那么取出 p 所指向节点的信息，并将它保存到 entry 结构中
-        // 然后用 prevlen 变量记录前置节点的长度
+        // 然后用 prevlen 变量记录前置节点的长度，就是将新节点插入p的前面
         // （当插入新节点之后 p 所指向的节点就成了新节点的前置节点）
         // T = O(1)
         entry = zipEntry(p);
@@ -1045,10 +1045,10 @@ static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsig
     }
     /* We need space for both the length of the previous entry and
      * the length of the payload. */
-    // 计算编码前置节点的长度所需的大小
+    // 计算编码前置节点的长度所需的大小，就是累加previous_entry_length需要的长度
     // T = O(1)
     reqlen += zipPrevEncodeLength(NULL,prevlen);
-    // 计算编码当前节点值所需的大小
+    // 计算编码当前节点值所需的大小，就是累加encoding需要的长度
     // T = O(1)
     reqlen += zipEncodeLength(NULL,encoding,slen);
 
