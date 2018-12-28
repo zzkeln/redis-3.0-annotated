@@ -897,11 +897,7 @@ static unsigned char *__ziplistCascadeUpdate(unsigned char *zl, unsigned char *p
 }
 
 /* Delete "num" entries, starting at "p". Returns pointer to the ziplist. 
- *
- * 从位置 p 开始，连续删除 num 个节点。
- *
- * 函数的返回值为处理删除操作之后的 ziplist 。
- *
+ * 从位置 p 开始，连续删除 num 个节点。函数的返回值为处理删除操作之后的 ziplist 。
  * T = O(N^2)
  */
 static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsigned int num) {
@@ -910,10 +906,9 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
     int nextdiff = 0;
     zlentry first, tail;
 
-    // 计算被删除节点总共占用的内存字节数
-    // 以及被删除节点的总个数
+    // 计算被删除节点总共占用的内存字节数, 以及被删除节点的总个数
     // T = O(N)
-    first = zipEntry(p);
+    first = zipEntry(p);//first记录第一个被删除的节点
     for (i = 0; p[0] != ZIP_END && i < num; i++) {
         p += zipRawEntryLength(p);
         deleted++;
@@ -923,7 +918,6 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
     totlen = p-first.p;
     if (totlen > 0) {
         if (p[0] != ZIP_END) {
-
             // 执行这里，表示被删除节点之后仍然有节点存在
 
             /* Storing `prevrawlen` in this entry may increase or decrease the
@@ -932,16 +926,20 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
              * stored by an entry that is now being deleted. */
             // 因为位于被删除范围之后的第一个节点的 header 部分的大小
             // 可能容纳不了新的前置节点，所以需要计算新旧前置节点之间的字节数差
+            // e1 d1 d2 d3 r1 r2，其中要删除d1, d2 ,d3，
+            //nextdiff=e1需要的previous_entry_length长度减去r1当前的previous_entry_length的长度
+            //如果nextdiff>0 例如等于4，那么r1的previous_entry_length就比较短需要扩展下
             // T = O(1)
             nextdiff = zipPrevLenByteDiff(p,first.prevrawlen);
             // 如果有需要的话，将指针 p 后退 nextdiff 字节，为新 header 空出空间
+            //如果nextdiff=4，那么p回退4个字节为r1的新header预留4字节空间
             p -= nextdiff;
-            // 将 first 的前置节点的长度编码至 p 中
+            // 将 first 的前置节点的长度编码至 p 中，将e1的长度编码到r1中
             // T = O(1)
             zipPrevEncodeLength(p,first.prevrawlen);
 
             /* Update offset for tail */
-            // 更新到达表尾的偏移量
+            // 更新到达表尾的偏移量，原来偏移量-删除字节数，这里其实不对，因为没考虑nextdiff
             // T = O(1)
             ZIPLIST_TAIL_OFFSET(zl) =
                 intrev32ifbe(intrev32ifbe(ZIPLIST_TAIL_OFFSET(zl))-totlen);
@@ -952,6 +950,7 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
             // 如果被删除节点之后，有多于一个节点
             // 那么程序需要将 nextdiff 记录的字节数也计算到表尾偏移量中
             // 这样才能让表尾偏移量正确对齐表尾节点
+            //这里将nextdiff也考虑下，其实感觉和上面更新tail的地方可以合并在一起处理？？？
             // T = O(1)
             tail = zipEntry(p);
             if (p[tail.headersize+tail.len] != ZIP_END) {
@@ -965,11 +964,10 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
             memmove(first.p,p,
                 intrev32ifbe(ZIPLIST_BYTES(zl))-(p-zl)-1);
         } else {
-
             // 执行这里，表示被删除节点之后已经没有其他节点了
 
             /* The entire tail was deleted. No need to move memory. */
-            // T = O(1)
+            // T = O(1) 更新tail=first.p-zl（表示道first节点处的偏移量），再减去first.prevrawlen，即再减去前一个节点的偏移量
             ZIPLIST_TAIL_OFFSET(zl) =
                 intrev32ifbe((first.p-zl)-first.prevrawlen);
         }
@@ -977,14 +975,13 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
         /* Resize and update length */
         // 缩小并更新 ziplist 的长度
         offset = first.p-zl;
-        zl = ziplistResize(zl, intrev32ifbe(ZIPLIST_BYTES(zl))-totlen+nextdiff);
+        zl = ziplistResize(zl, intrev32ifbe(ZIPLIST_BYTES(zl))-totlen+nextdiff); //调用realloc来缩小内存空间
         ZIPLIST_INCR_LENGTH(zl,-deleted);
         p = zl+offset;
 
         /* When nextdiff != 0, the raw length of the next entry has changed, so
          * we need to cascade the update throughout the ziplist */
-        // 如果 p 所指向的节点的大小已经变更，那么进行级联更新
-        // 检查 p 之后的所有节点是否符合 ziplist 的编码要求
+        // 如果 p 所指向的节点的大小已经变更，那么进行连锁更新，检查 p 之后的所有节点是否符合 ziplist 的编码要求
         // T = O(N^2)
         if (nextdiff != 0)
             zl = __ziplistCascadeUpdate(zl,p);
@@ -993,12 +990,9 @@ static unsigned char *__ziplistDelete(unsigned char *zl, unsigned char *p, unsig
     return zl;
 }
 
-/* Insert item at "p". */
-/*
+/* Insert item at "p". 
  * 根据指针 p 所指定的位置，将长度为 slen 的字符串 s 插入到 zl 中。
- *
  * 函数的返回值为完成插入操作之后的 ziplist
- *
  * T = O(N^2)
  */
 static unsigned char *__ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
@@ -1241,9 +1235,7 @@ unsigned char *ziplistIndex(unsigned char *zl, int index) {
  * The element after 'p' is returned, otherwise NULL if we are at the end. */
 /*
  * 返回 p 所指向节点的后置节点。
- *
  * 如果 p 为表末端，或者 p 已经是表尾节点，那么返回 NULL 。
- *
  * T = O(1)
  */
 unsigned char *ziplistNext(unsigned char *zl, unsigned char *p) {
@@ -1270,9 +1262,7 @@ unsigned char *ziplistNext(unsigned char *zl, unsigned char *p) {
 /* Return pointer to previous entry in ziplist. */
 /*
  * 返回 p 所指向节点的前置节点。
- *
  * 如果 p 所指向为空列表，或者 p 已经指向表头节点，那么返回 NULL 。
- *
  * T = O(1)
  */
 unsigned char *ziplistPrev(unsigned char *zl, unsigned char *p) {
@@ -1286,10 +1276,10 @@ unsigned char *ziplistPrev(unsigned char *zl, unsigned char *p) {
     // 那么尝试取出列表尾端节点
     if (p[0] == ZIP_END) {
         p = ZIPLIST_ENTRY_TAIL(zl);
-        // 尾端节点也指向列表末端，那么列表为空
+        // 如果列表是空的那么返回NULL，否则返回p
         return (p[0] == ZIP_END) ? NULL : p;
     
-    // 如果 p 指向列表头，那么说明迭代已经完成
+    // 如果 p 指向列表头，那么没有前置节点，返回NULL
     } else if (p == ZIPLIST_ENTRY_HEAD(zl)) {
         return NULL;
 
@@ -1309,23 +1299,17 @@ unsigned char *ziplistPrev(unsigned char *zl, unsigned char *p) {
  * Return 0 if 'p' points to the end of the ziplist, 1 otherwise. */
 /*
  * 取出 p 所指向节点的值：
- *
  * - 如果节点保存的是字符串，那么将字符串值指针保存到 *sstr 中，字符串长度保存到 *slen
- *
  * - 如果节点保存的是整数，那么将整数保存到 *sval
- *
  * 程序可以通过检查 *sstr 是否为 NULL 来检查值是字符串还是整数。
- *
  * 提取值成功返回 1 ，
  * 如果 p 为空，或者 p 指向的是列表末端，那么返回 0 ，提取值失败。
- *
  * T = O(1)
  */
 unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *slen, long long *sval) {
-
     zlentry entry;
-    if (p == NULL || p[0] == ZIP_END) return 0;
-    if (sstr) *sstr = NULL;
+    if (p == NULL || p[0] == ZIP_END) return 0;//p为空或列表为空，返回0表示提取失败
+    if (sstr) *sstr = NULL;//设置*sstr=NULL
 
     // 取出 p 所指向的节点的各项信息，并保存到结构 entry 中
     // T = O(1)
@@ -1335,8 +1319,8 @@ unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *sl
     // T = O(1)
     if (ZIP_IS_STR(entry.encoding)) {
         if (sstr) {
-            *slen = entry.len;
-            *sstr = p+entry.headersize;
+            *slen = entry.len; //保存字符串长度
+            *sstr = p+entry.headersize;//指向entry的content处
         }
     
     // 节点的值为整数，解码值，并将值保存到 *sval
@@ -1351,11 +1335,8 @@ unsigned int ziplistGet(unsigned char *p, unsigned char **sstr, unsigned int *sl
 }
 
 /* Insert an entry at "p". 
- *
  * 将包含给定值 s 的新节点插入到给定的位置 p 中。
- *
  * 如果 p 指向一个节点，那么新节点将放在原有节点的前面。
- *
  * T = O(N^2)
  */
 unsigned char *ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char *s, unsigned int slen) {
@@ -1365,34 +1346,29 @@ unsigned char *ziplistInsert(unsigned char *zl, unsigned char *p, unsigned char 
 /* Delete a single entry from the ziplist, pointed to by *p.
  * Also update *p in place, to be able to iterate over the
  * ziplist, while deleting entries. 
- *
  * 从 zl 中删除 *p 所指向的节点，
  * 并且原地更新 *p 所指向的位置，使得可以在迭代列表的过程中对节点进行删除。
- *
  * T = O(N^2)
  */
 unsigned char *ziplistDelete(unsigned char *zl, unsigned char **p) {
-
-    // 因为 __ziplistDelete 时会对 zl 进行内存重分配
-    // 而内存充分配可能会改变 zl 的内存地址
+    // 因为 __ziplistDelete 时会对 zl 进行内存重分配调用realloc
+    // 而内存重分配可能会改变 zl 的内存地址
     // 所以这里需要记录到达 *p 的偏移量
     // 这样在删除节点之后就可以通过偏移量来将 *p 还原到正确的位置
-    size_t offset = *p-zl;
+    size_t offset = *p-zl;//记录p节点的偏移量
     zl = __ziplistDelete(zl,*p,1);
 
     /* Store pointer to current element in p, because ziplistDelete will
      * do a realloc which might result in a different "zl"-pointer.
      * When the delete direction is back to front, we might delete the last
      * entry and end up with "p" pointing to ZIP_END, so check this. */
-    *p = zl+offset;
+    *p = zl+offset;//恢复让p指向节点处
 
     return zl;
 }
 
 /* Delete a range of entries from the ziplist. 
- *
  * 从 index 索引指定的节点开始，连续地从 zl 中删除 num 个节点。
- *
  * T = O(N^2)
  */
 unsigned char *ziplistDeleteRange(unsigned char *zl, unsigned int index, unsigned int num) {
@@ -1407,11 +1383,8 @@ unsigned char *ziplistDeleteRange(unsigned char *zl, unsigned int index, unsigne
 }
 
 /* Compare entry pointer to by 'p' with 'entry'. Return 1 if equal. 
- *
  * 将 p 所指向的节点的值和 sstr 进行对比。
- *
  * 如果节点值和 sstr 的值相等，返回 1 ，不相等则返回 0 。
- *
  * T = O(N)
  */
 unsigned int ziplistCompare(unsigned char *p, unsigned char *sstr, unsigned int slen) {
@@ -1423,9 +1396,7 @@ unsigned int ziplistCompare(unsigned char *p, unsigned char *sstr, unsigned int 
     // 取出节点
     entry = zipEntry(p);
     if (ZIP_IS_STR(entry.encoding)) {
-
         // 节点值为字符串，进行字符串对比
-
         /* Raw compare */
         if (entry.len == slen) {
             // T = O(N)
@@ -1433,10 +1404,8 @@ unsigned int ziplistCompare(unsigned char *p, unsigned char *sstr, unsigned int 
         } else {
             return 0;
         }
-    } else {
-        
+    } else {  
         // 节点值为整数，进行整数对比
-
         /* Try to compare encoded values. Don't compare encoding because
          * different implementations may encoded integers differently. */
         if (zipTryEncoding(sstr,slen,&sval,&sencoding)) {
@@ -1452,13 +1421,9 @@ unsigned int ziplistCompare(unsigned char *p, unsigned char *sstr, unsigned int 
 /* Find pointer to the entry equal to the specified entry. 
  * 
  * 寻找节点值和 vstr 相等的列表节点，并返回该节点的指针。
- * 
  * Skip 'skip' entries between every comparison. 
- *
  * 每次比对之前都跳过 skip 个节点。
- *
  * Returns NULL when the field could not be found. 
- *
  * 如果找不到相应的节点，则返回 NULL 。
  *
  * T = O(N^2)
@@ -1535,9 +1500,7 @@ unsigned char *ziplistFind(unsigned char *p, unsigned char *vstr, unsigned int v
 }
 
 /* Return length of ziplist. 
- * 
  * 返回 ziplist 中的节点个数
- *
  * T = O(N)
  */
 unsigned int ziplistLen(unsigned char *zl) {
@@ -1559,6 +1522,7 @@ unsigned int ziplistLen(unsigned char *zl) {
         }
 
         /* Re-store length if small enough */
+        //这里还进行restore节点长度的操作。。。
         if (len < UINT16_MAX) ZIPLIST_LENGTH(zl) = intrev16ifbe(len);
     }
 
