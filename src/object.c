@@ -33,14 +33,14 @@
 #include <ctype.h>
 
 /*
- * 创建一个新 robj 对象
+ * 创建一个新 robj 对象，用malloc分配内存，然后设置相关属性
  */
 robj *createObject(int type, void *ptr) {
 
-    robj *o = zmalloc(sizeof(*o));
+    robj *o = zmalloc(sizeof(*o)); //仅分配redisObject对象内存
 
     o->type = type;
-    o->encoding = REDIS_ENCODING_RAW;
+    o->encoding = REDIS_ENCODING_RAW;//默认编码是raw的简单动态字符串
     o->ptr = ptr;
     o->refcount = 1;
 
@@ -51,8 +51,9 @@ robj *createObject(int type, void *ptr) {
 
 /* Create a string object with encoding REDIS_ENCODING_RAW, that is a plain
  * string object where o->ptr points to a proper sds string. */
-// 创建一个 REDIS_ENCODING_RAW 编码的字符对象
-// 对象的指针指向一个 sds 结构
+// 创建一个 REDIS_ENCODING_RAW 编码的字符对，对象的指针指向一个 sds 结构
+//参数sdsnewlen(ptr, len)先用malloc分配sdshdr的内存空间。
+//这样raw编码的字符串对象共用2次malloc分配内存：一次为了字符串内容，一次为了redisObject
 robj *createRawStringObject(char *ptr, size_t len) {
     return createObject(REDIS_STRING,sdsnewlen(ptr,len));
 }
@@ -60,24 +61,27 @@ robj *createRawStringObject(char *ptr, size_t len) {
 /* Create a string object with encoding REDIS_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
-// 创建一个 REDIS_ENCODING_EMBSTR 编码的字符对象
-// 这个字符串对象中的 sds 会和字符串对象的 redisObject 结构一起分配
+// 创建一个 REDIS_ENCODING_EMBSTR 编码的字符对，这个字符串对象中的 sds 会和字符串对象的 redisObject 结构一起分配
 // 因此这个字符也是不可修改的
 robj *createEmbeddedStringObject(char *ptr, size_t len) {
+    //sizeof(struct sdshdr)+len+1是sdshdr需要的内存大小
+    //一次把内存分配好，包括redisObject和sdshdr内存
     robj *o = zmalloc(sizeof(robj)+sizeof(struct sdshdr)+len+1);
+    //o+1就是o向前移动sizeof(robj)字节大小，这样得到的是sdshdr的内存地址
     struct sdshdr *sh = (void*)(o+1);
 
-    o->type = REDIS_STRING;
-    o->encoding = REDIS_ENCODING_EMBSTR;
-    o->ptr = sh+1;
+    o->type = REDIS_STRING;//字符串对象
+    o->encoding = REDIS_ENCODING_EMBSTR; //编码是embstr
+    o->ptr = sh+1;//sh向前走sizeof(sturct sdshdr)字节大小，指向char buf[]处，就是实际的sds处
     o->refcount = 1;
     o->lru = LRU_CLOCK();
 
     sh->len = len;
     sh->free = 0;
     if (ptr) {
+	//拷贝ptr指向的字符串到buf处
         memcpy(sh->buf,ptr,len);
-        sh->buf[len] = '\0';
+        sh->buf[len] = '\0';//设置尾部'\0'
     } else {
         memset(sh->buf,0,len+1);
     }
@@ -91,6 +95,7 @@ robj *createEmbeddedStringObject(char *ptr, size_t len) {
  * The current limit of 39 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
 #define REDIS_ENCODING_EMBSTR_SIZE_LIMIT 39
+//len<=39则创建embstr编码的额字符串对象，否则创建raw编码的字符串对象
 robj *createStringObject(char *ptr, size_t len) {
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -100,7 +105,6 @@ robj *createStringObject(char *ptr, size_t len) {
 
 /*
  * 根据传入的整数值，创建一个字符串对象
- *
  * 这个字符串的对象保存的可以是 INT 编码的 long 值，
  * 也可以是 RAW 编码的、被转换成字符串的 long long 值。
  */
@@ -108,8 +112,7 @@ robj *createStringObjectFromLongLong(long long value) {
 
     robj *o;
 
-    // value 的大小符合 REDIS 共享整数的范围
-    // 那么返回一个共享对象
+    // value 的大小符合 REDIS 共享整数的范围[0,10000)， 那么返回一个共享对象
     if (value >= 0 && value < REDIS_SHARED_INTEGERS) {
         incrRefCount(shared.integers[value]);
         o = shared.integers[value];
@@ -120,8 +123,8 @@ robj *createStringObjectFromLongLong(long long value) {
         // 创建一个 REDIS_ENCODING_INT 编码的字符串对象
         if (value >= LONG_MIN && value <= LONG_MAX) {
             o = createObject(REDIS_STRING, NULL);
-            o->encoding = REDIS_ENCODING_INT;
-            o->ptr = (void*)((long)value);
+            o->encoding = REDIS_ENCODING_INT;//编码类型设置为int的字符串对象
+            o->ptr = (void*)((long)value); //存储值,注意long类型和void*类型都是8字节，所以可以存储，而int类型是4字节，不能存到void*中
 
         // 值不能用 long 类型保存（long long 类型），将值转换为字符串，
         // 并创建一个 REDIS_ENCODING_RAW 的字符串对象来保存值
@@ -137,7 +140,6 @@ robj *createStringObjectFromLongLong(long long value) {
  * belongs but it is actually designed to be used just for INCRBYFLOAT */
 /*
  * 根据传入的 long double 值，为它创建一个字符串对象
- *
  * 对象将 long double 转换为字符串来保存
  */
 robj *createStringObjectFromLongDouble(long double value) {
@@ -162,7 +164,7 @@ robj *createStringObjectFromLongDouble(long double value) {
             p--;
             len--;
         }
-        // 如果不需要小数点，那么移除它
+        // 走到这里尾部的0已经去掉了，如果等于.那么说明没有小数位了。如果不需要小数点，那么移除它。
         if (*p == '.') len--;
     }
 
@@ -172,18 +174,12 @@ robj *createStringObjectFromLongDouble(long double value) {
 
 /* Duplicate a string object, with the guarantee that the returned object
  * has the same encoding as the original one.
- *
  * 复制一个字符串对象，复制出的对象和输入对象拥有相同编码。
- *
  * This function also guarantees that duplicating a small integere object
  * (or a string object that contains a representation of a small integer)
  * will always result in a fresh object that is unshared (refcount == 1).
- *
- * 另外，
- * 这个函数在复制一个包含整数值的字符串对象时，总是产生一个非共享的对象。
- *
+ * 另外，这个函数在复制一个包含整数值的字符串对象时，总是产生一个非共享的对象。
  * The resulting object always has refcount set to 1. 
- *
  * 输出对象的 refcount 总为 1 。
  */
 robj *dupStringObject(robj *o) {
@@ -199,7 +195,8 @@ robj *dupStringObject(robj *o) {
     case REDIS_ENCODING_EMBSTR:
         return createEmbeddedStringObject(o->ptr,sdslen(o->ptr));
 
-    case REDIS_ENCODING_INT:
+    case REDIS_ENCODING_INT:	
+	//创建一个对象，然后设置编码和ptr
         d = createObject(REDIS_STRING, NULL);
         d->encoding = REDIS_ENCODING_INT;
         d->ptr = o->ptr;
