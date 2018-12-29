@@ -184,24 +184,18 @@ robj *createStringObjectFromLongDouble(long double value) {
  */
 robj *dupStringObject(robj *o) {
     robj *d;
-
     redisAssert(o->type == REDIS_STRING);
-
     switch(o->encoding) {
-
     case REDIS_ENCODING_RAW:
         return createRawStringObject(o->ptr,sdslen(o->ptr));
-
     case REDIS_ENCODING_EMBSTR:
         return createEmbeddedStringObject(o->ptr,sdslen(o->ptr));
-
     case REDIS_ENCODING_INT:	
 	//创建一个对象，然后设置编码和ptr
         d = createObject(REDIS_STRING, NULL);
-        d->encoding = REDIS_ENCODING_INT;
-        d->ptr = o->ptr;
-        return d;
-
+        d->encoding = REDIS_ENCODING_INT; //设置编码为整数
+        d->ptr = o->ptr;//设置ptr
+	return d;
     default:
         redisPanic("Wrong encoding.");
         break;
@@ -212,15 +206,10 @@ robj *dupStringObject(robj *o) {
  * 创建一个 LINKEDLIST 编码的列表对象
  */
 robj *createListObject(void) {
-
-    list *l = listCreate();
-
-    robj *o = createObject(REDIS_LIST,l);
-
-    listSetFreeMethod(l,decrRefCountVoid);
-
-    o->encoding = REDIS_ENCODING_LINKEDLIST;
-
+    list *l = listCreate();//创建双端链表
+    robj *o = createObject(REDIS_LIST,l);//创建redisObject，内部设置对象类型为list，设置ptr=l
+    listSetFreeMethod(l,decrRefCountVoid);//设置链表节点释放函数
+    o->encoding = REDIS_ENCODING_LINKEDLIST;//设置编码类型为linkedlist
     return o;
 }
 
@@ -228,13 +217,9 @@ robj *createListObject(void) {
  * 创建一个 ZIPLIST 编码的列表对象
  */
 robj *createZiplistObject(void) {
-
-    unsigned char *zl = ziplistNew();
-
-    robj *o = createObject(REDIS_LIST,zl);
-
-    o->encoding = REDIS_ENCODING_ZIPLIST;
-
+    unsigned char *zl = ziplistNew();//创建ziplist
+    robj *o = createObject(REDIS_LIST,zl);//创建redisObject，内部设置对象类型为list，设置ptr=zl
+    o->encoding = REDIS_ENCODING_ZIPLIST;//设置编码类型为ziplist
     return o;
 }
 
