@@ -255,13 +255,9 @@ robj *createIntsetObject(void) {
  * 创建一个 ZIPLIST 编码的哈希对象
  */
 robj *createHashObject(void) {
-
-    unsigned char *zl = ziplistNew();
-
-    robj *o = createObject(REDIS_HASH, zl);
-
-    o->encoding = REDIS_ENCODING_ZIPLIST;
-
+    unsigned char *zl = ziplistNew();//创建ziplist
+    robj *o = createObject(REDIS_HASH, zl);//创建redisObject
+    o->encoding = REDIS_ENCODING_ZIPLIST; //ziplist编码
     return o;
 }
 
