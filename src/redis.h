@@ -400,14 +400,14 @@ typedef long long mstime_t; /* millisecond time type. */
 #define REDIS_LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 typedef struct redisObject {
 
-    // 类型
+    // 哪种对象类型，共5种类型（字符串对象、列表对象、哈希对象、集合对象、有序集合对象）
     unsigned type:4;
 
-    // 编码
+    // 对象以哪种数据结构实现
     unsigned encoding:4;
 
-    // 对象最后一次被访问的时间
-    unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */
+    // 对象最后一次被访问的时间，占24位
+    unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */ 
 
     // 引用计数
     int refcount;
