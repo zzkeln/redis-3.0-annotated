@@ -257,18 +257,14 @@ robj *createHashObject(void) {
  * 创建一个 SKIPLIST 编码的有序集合
  */
 robj *createZsetObject(void) {
-
-    zset *zs = zmalloc(sizeof(*zs));
+    zset *zs = zmalloc(sizeof(*zs));//创建zset结构
 
     robj *o;
+    zs->dict = dictCreate(&zsetDictType,NULL);//创建字典
+    zs->zsl = zslCreate();//创建跳跃表
 
-    zs->dict = dictCreate(&zsetDictType,NULL);
-    zs->zsl = zslCreate();
-
-    o = createObject(REDIS_ZSET,zs);
-
-    o->encoding = REDIS_ENCODING_SKIPLIST;
-
+    o = createObject(REDIS_ZSET,zs);//设置redisObject和ptr=zs;
+    o->encoding = REDIS_ENCODING_SKIPLIST;//设置编码
     return o;
 }
 
@@ -276,13 +272,9 @@ robj *createZsetObject(void) {
  * 创建一个 ZIPLIST 编码的有序集合
  */
 robj *createZsetZiplistObject(void) {
-
-    unsigned char *zl = ziplistNew();
-
-    robj *o = createObject(REDIS_ZSET,zl);
-
-    o->encoding = REDIS_ENCODING_ZIPLIST;
-
+    unsigned char *zl = ziplistNew(); //创建ziplist
+    robj *o = createObject(REDIS_ZSET,zl);//创建redisObject并设置ptr=zl
+    o->encoding = REDIS_ENCODING_ZIPLIST;//设置编码
     return o;
 }
 
