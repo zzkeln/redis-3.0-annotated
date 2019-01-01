@@ -227,13 +227,9 @@ robj *createZiplistObject(void) {
  * 创建一个 SET 编码的集合对象
  */
 robj *createSetObject(void) {
-
-    dict *d = dictCreate(&setDictType,NULL);
-
-    robj *o = createObject(REDIS_SET,d);
-
-    o->encoding = REDIS_ENCODING_HT;
-
+    dict *d = dictCreate(&setDictType,NULL);//创建字典
+    robj *o = createObject(REDIS_SET,d);//创建redisObject并设置对象类型为set，设置ptr=is
+    o->encoding = REDIS_ENCODING_HT;//设置编码为字典
     return o;
 }
 
@@ -241,13 +237,9 @@ robj *createSetObject(void) {
  * 创建一个 INTSET 编码的集合对象
  */
 robj *createIntsetObject(void) {
-
-    intset *is = intsetNew();
-
-    robj *o = createObject(REDIS_SET,is);
-
-    o->encoding = REDIS_ENCODING_INTSET;
-
+    intset *is = intsetNew(); //创建整数集合
+    robj *o = createObject(REDIS_SET,is); //创建redisObject并设置对象类型为set，设置ptr=is
+    o->encoding = REDIS_ENCODING_INTSET;//设置编码为整数集合
     return o;
 }
 
