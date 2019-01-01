@@ -36,16 +36,15 @@
  * 创建一个新 robj 对象，用malloc分配内存，然后设置相关属性
  */
 robj *createObject(int type, void *ptr) {
-
     robj *o = zmalloc(sizeof(*o)); //仅分配redisObject对象内存
 
-    o->type = type;
+    o->type = type;//设置对象类型
     o->encoding = REDIS_ENCODING_RAW;//默认编码是raw的简单动态字符串
-    o->ptr = ptr;
-    o->refcount = 1;
+    o->ptr = ptr;//设置object指针
+    o->refcount = 1; //初始引用计数设为1
 
     /* Set the LRU to the current lruclock (minutes resolution). */
-    o->lru = LRU_CLOCK();
+    o->lru = LRU_CLOCK();//设置最后一次访问的时间
     return o;
 }
 
