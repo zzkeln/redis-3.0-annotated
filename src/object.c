@@ -94,7 +94,7 @@ robj *createEmbeddedStringObject(char *ptr, size_t len) {
  * The current limit of 39 is chosen so that the biggest string object
  * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
 #define REDIS_ENCODING_EMBSTR_SIZE_LIMIT 39
-//len<=39则创建embstr编码的额字符串对象，否则创建raw编码的字符串对象
+//len<=39则创建embstr编码的字符串对象，否则创建raw编码的字符串对象
 robj *createStringObject(char *ptr, size_t len) {
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT)
         return createEmbeddedStringObject(ptr,len);
@@ -223,7 +223,7 @@ robj *createZiplistObject(void) {
 }
 
 /*
- * 创建一个 SET 编码的集合对象
+ * 创建一个 hashtable 编码的集合对象
  */
 robj *createSetObject(void) {
     dict *d = dictCreate(&setDictType,NULL);//创建字典
@@ -253,7 +253,7 @@ robj *createHashObject(void) {
 }
 
 /*
- * 创建一个 SKIPLIST 编码的有序集合
+ * 创建一个 skiplist+hashtable 编码的有序集合
  */
 robj *createZsetObject(void) {
     zset *zs = zmalloc(sizeof(*zs));//创建zset结构
@@ -278,7 +278,7 @@ robj *createZsetZiplistObject(void) {
 }
 
 /*
- * 释放字符串对象
+ * 释放字符串对象（是释放对象的ptr内存，并不释放redisObject内存）
  */
 void freeStringObject(robj *o) {
     if (o->encoding == REDIS_ENCODING_RAW) {
@@ -287,18 +287,16 @@ void freeStringObject(robj *o) {
 }
 
 /*
- * 释放列表对象
+ * 释放列表对象（释放对象的ptr内存，并不释放redisObject内存）
  */
 void freeListObject(robj *o) {
-
     switch (o->encoding) {
-
     case REDIS_ENCODING_LINKEDLIST:
-        listRelease((list*) o->ptr);
+        listRelease((list*) o->ptr); //释放链表内存
         break;
 
     case REDIS_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        zfree(o->ptr);//释放ziplist内存
         break;
 
     default:
@@ -307,18 +305,16 @@ void freeListObject(robj *o) {
 }
 
 /*
- * 释放集合对象
+ * 释放集合对象（仅释放ptr内存，不释放redisObject内存）
  */
 void freeSetObject(robj *o) {
-
     switch (o->encoding) {
-
     case REDIS_ENCODING_HT:
-        dictRelease((dict*) o->ptr);
+        dictRelease((dict*) o->ptr); //释放字典内存
         break;
-
+		    
     case REDIS_ENCODING_INTSET:
-        zfree(o->ptr);
+        zfree(o->ptr); //释放整数集合内存
         break;
 
     default:
@@ -327,23 +323,21 @@ void freeSetObject(robj *o) {
 }
 
 /*
- * 释放有序集合对象
+ * 释放有序集合对象（仅释放ptr内存，不释放redisObject内存）
  */
 void freeZsetObject(robj *o) {
-
     zset *zs;
-
     switch (o->encoding) {
 
     case REDIS_ENCODING_SKIPLIST:
         zs = o->ptr;
-        dictRelease(zs->dict);
-        zslFree(zs->zsl);
-        zfree(zs);
+        dictRelease(zs->dict); //释放字典内存
+        zslFree(zs->zsl);//释放skiplist内存
+        zfree(zs);//释放zset内存
         break;
 
     case REDIS_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        zfree(o->ptr); //释放ziplist内存
         break;
 
     default:
@@ -352,18 +346,16 @@ void freeZsetObject(robj *o) {
 }
 
 /*
- * 释放哈希对象
+ * 释放哈希对象（仅释放ptr内存，不释放redisObject内存）
  */
 void freeHashObject(robj *o) {
-
     switch (o->encoding) {
-
     case REDIS_ENCODING_HT:
-        dictRelease((dict*) o->ptr);
+        dictRelease((dict*) o->ptr);//释放字典内存
         break;
 
     case REDIS_ENCODING_ZIPLIST:
-        zfree(o->ptr);
+        zfree(o->ptr);//释放ziplist内存
         break;
 
     default:
@@ -379,18 +371,14 @@ void incrRefCount(robj *o) {
     o->refcount++;
 }
 
-/*
- * 为对象的引用计数减一
- *
- * 当对象的引用计数降为 0 时，释放对象。
+/* 为对象的引用计数减一。当对象的引用计数降为 0 时，释放对象。
  */
 void decrRefCount(robj *o) {
-
     if (o->refcount <= 0) redisPanic("decrRefCount against refcount <= 0");
 
-    // 释放对象
+    // 引用计数为1，减1后为0那么释放对象内存
     if (o->refcount == 1) {
-        switch(o->type) {
+        switch(o->type) { //根据对象类型的不同，调用不同的对象释放函数
         case REDIS_STRING: freeStringObject(o); break;
         case REDIS_LIST: freeListObject(o); break;
         case REDIS_SET: freeSetObject(o); break;
@@ -409,7 +397,6 @@ void decrRefCount(robj *o) {
 /* This variant of decrRefCount() gets its argument as void, and is useful
  * as free method in data structures that expect a 'void free_object(void*)'
  * prototype for the free method. 
- *
  * 作用于特定数据结构的释放函数包装
  */
 void decrRefCountVoid(void *o) {
@@ -417,7 +404,6 @@ void decrRefCountVoid(void *o) {
 }
 
 /* This function set the ref count to zero without freeing the object.
- *
  * 这个函数将对象的引用计数设为 0 ，但并不释放对象。
  *
  * It is useful in order to pass a new object to functions incrementing
@@ -435,6 +421,7 @@ void decrRefCountVoid(void *o) {
  *    *obj = createObject(...);
  *    functionThatWillIncrementRefCount(obj);
  *    decrRefCount(obj);
+ * //将引用计数置位0，然后返回对象
  */
 robj *resetRefCount(robj *obj) {
     obj->refcount = 0;
@@ -443,45 +430,41 @@ robj *resetRefCount(robj *obj) {
 
 /*
  * 检查对象 o 的类型是否和 type 相同：
- *
  *  - 相同返回 0 
- *
  *  - 不相同返回 1 ，并向客户端回复一个错误
  */
 int checkType(redisClient *c, robj *o, int type) {
-
     if (o->type != type) {
         addReply(c,shared.wrongtypeerr);
         return 1;
     }
-
     return 0;
 }
 
 /*
  * 检查对象 o 中的值能否表示为 long long 类型：
- *
  *  - 可以则返回 REDIS_OK ，并将 long long 值保存到 *llval 中。
- *
  *  - 不可以则返回 REDIS_ERR
  */
 int isObjectRepresentableAsLongLong(robj *o, long long *llval) {
+    redisAssertWithInfo(NULL,o,o->type == REDIS_STRING); //assert 对象o类型肯定是字符串对象
 
-    redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
-
-    // INT 编码的 long 值总是能保存为 long long
+    // 字符串对象的int编码，ptr是可以用long保存的，所以肯定可以转换
     if (o->encoding == REDIS_ENCODING_INT) {
-        if (llval) *llval = (long) o->ptr;
+        if (llval) *llval = (long) o->ptr;//保存ptr的值
         return REDIS_OK;
-
-    // 如果是字符串的话，那么尝试将它转换为 long long
+	    
+    // 如果不是int编码的，那么可能是embstrt或raw编码的字符串，尝试将它转换为long long
     } else {
         return string2ll(o->ptr,sdslen(o->ptr),llval) ? REDIS_OK : REDIS_ERR;
     }
 }
 
 /* Try to encode a string object in order to save space */
-// 尝试对字符串对象进行编码，以节约内存。
+// 尝试对字符串对象（raw或embstr编码的字符串对象）进行编码，以节约内存。
+//1. 如果能转换成INT编码的字符串对象，那么转换
+//2. 如果raw能转换成embstr编码的字符串对象，那么转换
+//3. 如果以上都不能，是raw编码，并且free的字节长度超过整个长度的1/10，那么释放掉free长度的内存节约内存
 robj *tryObjectEncoding(robj *o) {
     long value;
 
@@ -492,26 +475,29 @@ robj *tryObjectEncoding(robj *o) {
      * in this function. Other types use encoded memory efficient
      * representations but are handled by the commands implementing
      * the type. */
+    //用assert保证对象类型必须是字符串对象
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
 
     /* We try some specialized encoding only for objects that are
      * RAW or EMBSTR encoded, in other words objects that are still
      * in represented by an actually array of chars. */
     // 只在字符串的编码为 RAW 或者 EMBSTR 时尝试进行编码
+//#define sdsEncodedObject(objptr) (objptr->encoding == REDIS_ENCODING_RAW || objptr->encoding == REDIS_ENCODING_EMBSTR)
     if (!sdsEncodedObject(o)) return o;
 
     /* It's not safe to encode shared objects: shared objects can be shared
      * everywhere in the "object space" of Redis and may end in places where
      * they are not handled. We handle them only as values in the keyspace. */
-     // 不对共享对象进行编码
+     // 不对共享对象进行编码，所以接下去肯定refcount=1
      if (o->refcount > 1) return o;
 
     /* Check if we can represent this string as a long integer.
      * Note that we are sure that a string larger than 21 chars is not
      * representable as a 32 nor 64 bit integer. */
-    // 对字符串进行检查
+    // 对字符串进行检查（long的整数转换成字符串后最大长度是21个字符，超过21个字符的字符串肯定不能转换成long了）
     // 只对长度小于或等于 21 字节，并且可以被解释为整数的字符串进行编码
     len = sdslen(s);
+    //转换成int编码的字符串对象
     if (len <= 21 && string2l(s,len,&value)) {
         /* This object is encodable as a long. Try to use a shared object.
          * Note that we avoid using shared integers when maxmemory is used
@@ -521,13 +507,14 @@ robj *tryObjectEncoding(robj *o) {
             value >= 0 &&
             value < REDIS_SHARED_INTEGERS)
         {
-            decrRefCount(o);
-            incrRefCount(shared.integers[value]);
-            return shared.integers[value];
+            decrRefCount(o);//当前对象引用计数减1
+            incrRefCount(shared.integers[value]); //共享对象引用计数加1
+            return shared.integers[value]; //返回共享对象
         } else {
-            if (o->encoding == REDIS_ENCODING_RAW) sdsfree(o->ptr);
-            o->encoding = REDIS_ENCODING_INT;
-            o->ptr = (void*) value;
+	    //如果是raw编码的字符串对象，释放掉这个字符串内容
+            if (o->encoding == REDIS_ENCODING_RAW) sdsfree(o->ptr); 
+            o->encoding = REDIS_ENCODING_INT;//编码转换成int
+            o->ptr = (void*) value;//设置值
             return o;
         }
     }
@@ -536,14 +523,14 @@ robj *tryObjectEncoding(robj *o) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
-    // 尝试将 RAW 编码的字符串编码为 EMBSTR 编码
+    // 将raw编码的转换成embstr编码的字符串对象
     if (len <= REDIS_ENCODING_EMBSTR_SIZE_LIMIT) {
         robj *emb;
 
-        if (o->encoding == REDIS_ENCODING_EMBSTR) return o;
-        emb = createEmbeddedStringObject(s,sdslen(s));
-        decrRefCount(o);
-        return emb;
+        if (o->encoding == REDIS_ENCODING_EMBSTR) return o;//如果已经是embstr编码的，直接返回
+        emb = createEmbeddedStringObject(s,sdslen(s));//创建embstr编码的字符串对象
+        decrRefCount(o);//当前字符串对象引用计数减1
+        return emb; //返回这个对象
     }
 
     /* We can't encode the object...
@@ -567,28 +554,28 @@ robj *tryObjectEncoding(robj *o) {
 }
 
 /* Get a decoded version of an encoded object (returned as a new object).
- *
  * 以新对象的形式，返回一个输入对象的解码版本（RAW 编码）。
- *
  * If the object is already raw-encoded just increment the ref count. 
- *
  * 如果对象已经是 RAW 编码的，那么对输入对象的引用计数增一，
  * 然后返回输入对象。
  */
+//如果已经是raw或embstr编码的字符串对象，增加引用计数后直接返回；如果是int编码的字符串对象，那么创建出一个embstr编码的
+//字符串对象然后再返回。
 robj *getDecodedObject(robj *o) {
     robj *dec;
 
+    //已经是raw或embstr编码的字符串对象，增加引用计数，然后返回对象
     if (sdsEncodedObject(o)) {
         incrRefCount(o);
         return o;
     }
 
-    // 解码对象，将对象的值从整数转换为字符串
+    //将对象的值从整数转换为字符串，然后创建出一个embstr编码的字符串对象并返回
     if (o->type == REDIS_STRING && o->encoding == REDIS_ENCODING_INT) {
         char buf[32];
 
-        ll2string(buf,32,(long)o->ptr);
-        dec = createStringObject(buf,strlen(buf));
+        ll2string(buf,32,(long)o->ptr);//整数写入buf中
+        dec = createStringObject(buf,strlen(buf)); //创建字符串对象（因为长度小于39，创建出来的是embstr编码的字符串对象）
         return dec;
 
     } else {
@@ -604,9 +591,7 @@ robj *getDecodedObject(robj *o) {
  * use ll2string() to get a string representation of the numbers on the stack
  * and compare the strings, it's much faster than calling getDecodedObject().
  *
- * 注意，因为字符串对象可能实际上保存的是整数值，
- * 如果出现这种情况，那么函数先将整数转换为字符串，
- * 然后再对比两个字符串，
+ * 注意，因为字符串对象可能实际上保存的是整数值，如果出现这种情况，那么函数先将整数转换为字符串，然后再对比两个字符串，
  * 这种做法比调用 getDecodedObject() 更快
  *
  * Important note: when REDIS_COMPARE_BINARY is used a binary-safe comparison
@@ -617,20 +602,23 @@ robj *getDecodedObject(robj *o) {
 
 #define REDIS_COMPARE_BINARY (1<<0)
 #define REDIS_COMPARE_COLL (1<<1)
-
+//将字符串对象都先转换成字符串，然后按照文本或二进制方式（取决于flag）进行比较。（所以如果是int编码的话也会先转换成char buf[]然后比较buf）
 int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
+    //a和b都必须是字符串对象
     redisAssertWithInfo(NULL,a,a->type == REDIS_STRING && b->type == REDIS_STRING);
 
     char bufa[128], bufb[128], *astr, *bstr;
     size_t alen, blen, minlen;
 
-    if (a == b) return 0;
+    if (a == b) return 0;//都一个对象，不用比了，直接相等
 
-	// 指向字符串值，并在有需要时，将整数转换为字符串 a
+    // 指向字符串值，并在有需要时，将整数转换为字符串 a
     if (sdsEncodedObject(a)) {
+	//是raw或embstr编码的字符串，获取字符串指针和长度
         astr = a->ptr;
         alen = sdslen(astr);
     } else {
+	//是int编码的字符串，转换成字符串并获取长度
         alen = ll2string(bufa,sizeof(bufa),(long) a->ptr);
         astr = bufa;
     }
@@ -644,13 +632,13 @@ int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
         bstr = bufb;
     }
 
-
-	// 对比
+    //posix中，strcoll==strcmp，对字符串按照文本数据进行比较
     if (flags & REDIS_COMPARE_COLL) {
         return strcoll(astr,bstr);
     } else {
         int cmp;
 
+	//调用memcmp对字符串按照二进制数据进行比较
         minlen = (alen < blen) ? alen : blen;
         cmp = memcmp(astr,bstr,minlen);
         if (cmp == 0) return alen-blen;
@@ -659,53 +647,52 @@ int compareStringObjectsWithFlags(robj *a, robj *b, int flags) {
 }
 
 /* Wrapper for compareStringObjectsWithFlags() using binary comparison. */
+//按照二进制对字符串对象进行比较（调用memcmp比较）
 int compareStringObjects(robj *a, robj *b) {
     return compareStringObjectsWithFlags(a,b,REDIS_COMPARE_BINARY);
 }
 
 /* Wrapper for compareStringObjectsWithFlags() using collation. */
+//按照文本对字符串进行比较（调用strcoll=strcmp比较）
 int collateStringObjects(robj *a, robj *b) {
     return compareStringObjectsWithFlags(a,b,REDIS_COMPARE_COLL);
 }
 
 /* Equal string objects return 1 if the two objects are the same from the
  * point of view of a string comparison, otherwise 0 is returned. 
- *
  * 如果两个对象的值在字符串的形式上相等，那么返回 1 ， 否则返回 0 。
- *
  * Note that this function is faster then checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. 
- *
  * 这个函数做了相应的优化，所以比 (compareStringObject(a, b) == 0) 更快一些。
  */
+//比较2个字符串对象，如果都是int编码的直接比较long值；否则按照二进制方式比较两个字符串
 int equalStringObjects(robj *a, robj *b) {
 
     // 对象的编码为 INT ，直接对比值
     // 这里避免了将整数值转换为字符串，所以效率更高
     if (a->encoding == REDIS_ENCODING_INT &&
         b->encoding == REDIS_ENCODING_INT){
-        /* If both strings are integer encoded just check if the stored
-         * long is the same. */
+        /* If both strings are integer encoded just check if the stored long is the same. */
         return a->ptr == b->ptr;
 
-    // 进行字符串对象
+    // 按照二进制方式比较两个字符串
     } else {
         return compareStringObjects(a,b) == 0;
     }
 }
 
 /*
- * 返回字符串对象中字符串值的长度
+ * 返回字符串对象中字符串值的长度，如果是raw或embstr直接返回字符串长度；如果是int编码，先将long转换成字符串然后返回长度
+ * 例如long值是1234，那么返回4
  */
 size_t stringObjectLen(robj *o) {
-
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
 
     if (sdsEncodedObject(o)) {
+	//raw或embstr编码，返回字符串长度
         return sdslen(o->ptr);
 
-    // INT 编码，计算将这个值转换为字符串要多少字节
-    // 相当于返回它的长度
+    // INT 编码，计算将这个值转换为字符串要多少字节，返回字符串形式的长度
     } else {
         char buf[32];
         return ll2string(buf,32,(long)o->ptr);
