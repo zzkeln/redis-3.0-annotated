@@ -700,10 +700,8 @@ size_t stringObjectLen(robj *o) {
 }
 
 /*
- * 尝试从对象中取出 double 值
- *
+ * 尝试从字符串对象中取出 double 值
  *  - 转换成功则将值保存在 *target 中，函数返回 REDIS_OK
- *
  *  - 否则，函数返回 REDIS_ERR
  */
 int getDoubleFromObject(robj *o, double *target) {
@@ -714,12 +712,12 @@ int getDoubleFromObject(robj *o, double *target) {
         value = 0;
 
     } else {
-        redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
+        redisAssertWithInfo(NULL,o,o->type == REDIS_STRING); //o是字符串对象
 
         // 尝试从字符串中转换 double 值
         if (sdsEncodedObject(o)) {
             errno = 0;
-            value = strtod(o->ptr, &eptr);
+            value = strtod(o->ptr, &eptr);//调用库函数将str转换成double
             if (isspace(((char*)o->ptr)[0]) ||
                 eptr[0] != '\0' ||
                 (errno == ERANGE &&
@@ -728,7 +726,7 @@ int getDoubleFromObject(robj *o, double *target) {
                 isnan(value))
                 return REDIS_ERR;
 
-        // INT 编码
+        // INT 编码 直接将long转换成double 
         } else if (o->encoding == REDIS_ENCODING_INT) {
             value = (long)o->ptr;
 
@@ -744,16 +742,12 @@ int getDoubleFromObject(robj *o, double *target) {
 
 /*
  * 尝试从对象 o 中取出 double 值：
- *
  *  - 如果尝试失败的话，就返回指定的回复 msg 给客户端，函数返回 REDIS_ERR 。
- *
  *  - 取出成功的话，将值保存在 *target 中，函数返回 REDIS_OK 。
  */
 int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const char *msg) {
-
     double value;
-
-    if (getDoubleFromObject(o, &value) != REDIS_OK) {
+    if (getDoubleFromObject(o, &value) != REDIS_OK) { //失败了
         if (msg != NULL) {
             addReplyError(c,(char*)msg);
         } else {
@@ -762,15 +756,13 @@ int getDoubleFromObjectOrReply(redisClient *c, robj *o, double *target, const ch
         return REDIS_ERR;
     }
 
-    *target = value;
+    *target = value;//成功了
     return REDIS_OK;
 }
 
 /*
  * 尝试从对象中取出 long double 值
- *
  *  - 转换成功则将值保存在 *target 中，函数返回 REDIS_OK
- *
  *  - 否则，函数返回 REDIS_ERR
  */
 int getLongDoubleFromObject(robj *o, long double *target) {
@@ -780,7 +772,6 @@ int getLongDoubleFromObject(robj *o, long double *target) {
     if (o == NULL) {
         value = 0;
     } else {
-
         redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
 
         // RAW 编码，尝试从字符串中转换 long double
@@ -806,15 +797,11 @@ int getLongDoubleFromObject(robj *o, long double *target) {
 
 /*
  * 尝试从对象 o 中取出 long double 值：
- *
  *  - 如果尝试失败的话，就返回指定的回复 msg 给客户端，函数返回 REDIS_ERR 。
- *
  *  - 取出成功的话，将值保存在 *target 中，函数返回 REDIS_OK 。
  */
 int getLongDoubleFromObjectOrReply(redisClient *c, robj *o, long double *target, const char *msg) {
-
     long double value;
-
     if (getLongDoubleFromObject(o, &value) != REDIS_OK) {
         if (msg != NULL) {
             addReplyError(c,(char*)msg);
@@ -829,16 +816,10 @@ int getLongDoubleFromObjectOrReply(redisClient *c, robj *o, long double *target,
 }
 
 /*
- * 尝试从对象 o 中取出整数值，
- * 或者尝试将对象 o 所保存的值转换为整数值，
- * 并将这个整数值保存到 *target 中。
- *
+ * 尝试从对象 o 中取出整数值， 或者尝试将对象 o 所保存的值转换为整数值，并将这个整数值保存到 *target 中。
  * 如果 o 为 NULL ，那么将 *target 设为 0 。
- *
  * 如果对象 o 中的值不是整数，并且不能转换为整数，那么函数返回 REDIS_ERR 。
- *
  * 成功取出或者成功进行转换时，返回 REDIS_OK 。
- *
  * T = O(N)
  */
 int getLongLongFromObject(robj *o, long long *target) {
@@ -849,29 +830,24 @@ int getLongLongFromObject(robj *o, long long *target) {
         // o 为 NULL 时，将值设为 0 。
         value = 0;
     } else {
-
-        // 确保对象为 REDIS_STRING 类型
-        redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
-        if (sdsEncodedObject(o)) {
+        redisAssertWithInfo(NULL,o,o->type == REDIS_STRING); //o是字符串对象
+        if (sdsEncodedObject(o)) { //raw和embstr编码的字符串对象
             errno = 0;
             // T = O(N)
-            value = strtoll(o->ptr, &eptr, 10);
+            value = strtoll(o->ptr, &eptr, 10); //string to long
             if (isspace(((char*)o->ptr)[0]) || eptr[0] != '\0' ||
                 errno == ERANGE)
                 return REDIS_ERR;
         } else if (o->encoding == REDIS_ENCODING_INT) {
-            // 对于 REDIS_ENCODING_INT 编码的整数值
-            // 直接将它的值保存到 value 中
+	    //INT编码的字符串对象，直接保存值
             value = (long)o->ptr;
         } else {
             redisPanic("Unknown string encoding");
         }
     }
 
-    // 保存值到指针
+    // 保存值到指针中
     if (target) *target = value;
-
-    // 返回结果标识符
     return REDIS_OK;
 }
 
@@ -886,9 +862,7 @@ int getLongLongFromObject(robj *o, long long *target) {
  * T = O(N)
  */
 int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, const char *msg) {
-
     long long value;
-
     // T = O(N)
     if (getLongLongFromObject(o, &value) != REDIS_OK) {
         if (msg != NULL) {
@@ -900,7 +874,6 @@ int getLongLongFromObjectOrReply(redisClient *c, robj *o, long long *target, con
     }
 
     *target = value;
-
     return REDIS_OK;
 }
 
@@ -936,9 +909,7 @@ int getLongFromObjectOrReply(redisClient *c, robj *o, long *target, const char *
  * 返回编码的字符串表示
  */
 char *strEncoding(int encoding) {
-
     switch(encoding) {
-
     case REDIS_ENCODING_RAW: return "raw";
     case REDIS_ENCODING_INT: return "int";
     case REDIS_ENCODING_HT: return "hashtable";
@@ -966,7 +937,6 @@ unsigned long long estimateObjectIdleTime(robj *o) {
 
 /* This is a helper function for the OBJECT command. We need to lookup keys
  * without any modification of LRU or other parameters.
- *
  * OBJECT 命令的辅助函数，用于在不修改 LRU 时间的情况下，尝试获取 key 对象
  */
 robj *objectCommandLookup(redisClient *c, robj *key) {
@@ -978,7 +948,6 @@ robj *objectCommandLookup(redisClient *c, robj *key) {
 
 /*
  * 在不修改 LRU 时间的情况下，获取 key 对应的对象。
- *
  * 如果对象不存在，那么向客户端发送回复 reply 。
  */
 robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
@@ -990,10 +959,11 @@ robj *objectCommandLookupOrReply(redisClient *c, robj *key, robj *reply) {
 
 /* Object command allows to inspect the internals of an Redis Object.
  * Usage: OBJECT <verb> ... arguments ... */
+//获取属性的一些属性，包括refcount、encoding和idletime（这三个属性都不会改变对象的lru时间）
 void objectCommand(redisClient *c) {
     robj *o;
 
-    // 返回对戏哪个的引用计数
+    // 返回对象的引用计数
     if (!strcasecmp(c->argv[1]->ptr,"refcount") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c,c->argv[2],shared.nullbulk))
                 == NULL) return;
