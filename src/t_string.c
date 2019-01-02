@@ -36,13 +36,10 @@
 
 /*
  * 检查给定字符串长度 len 是否超过限制值 512 MB
- *
  * 超过返回 REDIS_ERR ，未超过返回 REDIS_OK
- *
  * T = O(1)
  */
 static int checkStringLength(redisClient *c, long long size) {
-
     if (size > 512*1024*1024) {
         addReplyError(c,"string exceeds maximum allowed size (512MB)");
         return REDIS_ERR;
@@ -54,30 +51,20 @@ static int checkStringLength(redisClient *c, long long size) {
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
  * following commands: SET, SETEX, PSETEX, SETNX.
- *
  * setGenericCommand() 函数实现了 SET 、 SETEX 、 PSETEX 和 SETNX 命令。
- *
  * 'flags' changes the behavior of the command (NX or XX, see belove).
- *
  * flags 参数的值可以是 NX 或 XX ，它们的意义请见下文。
- *
  * 'expire' represents an expire to set in form of a Redis object as passed
  * by the user. It is interpreted according to the specified 'unit'.
- *
  * expire 定义了 Redis 对象的过期时间。
- *
  * 而这个过期时间的格式由 unit 参数指定。
- *
  * 'ok_reply' and 'abort_reply' is what the function will reply to the client
  * if the operation is performed, or when it is not because of NX or
  * XX flags.
- *
  * ok_reply 和 abort_reply 决定了命令回复的内容，
  * NX 参数和 XX 参数也会改变回复。
- *
  * If ok_reply is NULL "+OK" is used.
  * If abort_reply is NULL, "$-1" is used. 
- *
  * 如果 ok_reply 为 NULL ，那么 "+OK" 被返回。
  * 如果 abort_reply 为 NULL ，那么 "$-1" 被返回。
  */
@@ -87,30 +74,27 @@ static int checkStringLength(redisClient *c, long long size) {
 #define REDIS_SET_XX (1<<1)     /* Set if key exists. */
 
 void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *expire, int unit, robj *ok_reply, robj *abort_reply) {
-
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
 
-    // 取出过期时间
+    // 取出过期时间，内部都以毫秒来算
     if (expire) {
-
-        // 取出 expire 参数的值
+        // 从expire对象中取出 expire 参数的值，如果取值失败，就直接在c中添加回复的errmsg
         // T = O(N)
         if (getLongLongFromObjectOrReply(c, expire, &milliseconds, NULL) != REDIS_OK)
             return;
 
-        // expire 参数的值不正确时报错
+        // expire 参数的值不正确时直接报错
         if (milliseconds <= 0) {
             addReplyError(c,"invalid expire time in SETEX");
             return;
         }
 
-        // 不论输入的过期时间是秒还是毫秒
-        // Redis 实际都以毫秒的形式保存过期时间
+        // 不论输入的过期时间是秒还是毫秒；Redis 实际都以毫秒的形式保存过期时间
         // 如果输入的过期时间为秒，那么将它转换为毫秒
         if (unit == UNIT_SECONDS) milliseconds *= 1000;
     }
 
-    // 如果设置了 NX 或者 XX 参数，那么检查条件是否不符合这两个设置
+    // 如果设置了 NX 或者 XX 参数，那么检查条件是否不符合这两个设置。NX只有key不存在时才进行设置，XX只有key存在时才进行设置
     // 在条件不符合时报错，报错的内容由 abort_reply 参数决定
     if ((flags & REDIS_SET_NX && lookupKeyWrite(c->db,key) != NULL) ||
         (flags & REDIS_SET_XX && lookupKeyWrite(c->db,key) == NULL))
@@ -119,13 +103,13 @@ void setGenericCommand(redisClient *c, int flags, robj *key, robj *val, robj *ex
         return;
     }
 
-    // 将键值关联到数据库
+    // 将键值添加到数据库
     setKey(c->db,key,val);
 
     // 将数据库设为脏
     server.dirty++;
 
-    // 为键设置过期时间
+    // 为键设置过期时间，当前时间+过期时间
     if (expire) setExpire(c->db,key,mstime()+milliseconds);
 
     // 发送事件通知
@@ -152,6 +136,7 @@ void setCommand(redisClient *c) {
         char *a = c->argv[j]->ptr;
         robj *next = (j == c->argc-1) ? NULL : c->argv[j+1];
 
+        //对argument的大小写不敏感，至少保证a的大小>=3（由外层保证？？）
         if ((a[0] == 'n' || a[0] == 'N') &&
             (a[1] == 'x' || a[1] == 'X') && a[2] == '\0') {
             flags |= REDIS_SET_NX;
@@ -162,39 +147,41 @@ void setCommand(redisClient *c) {
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' && next) {
             unit = UNIT_SECONDS;
             expire = next;
-            j++;
+            j++;//跳过下一个
         } else if ((a[0] == 'p' || a[0] == 'P') &&
                    (a[1] == 'x' || a[1] == 'X') && a[2] == '\0' && next) {
             unit = UNIT_MILLISECONDS;
             expire = next;
-            j++;
+            j++;//跳过下一个
         } else {
             addReply(c,shared.syntaxerr);
             return;
         }
     }
 
-    // 尝试对值对象进行编码
+    // argv也都是robj，对value对象尝试编码（尽量转换成int编码或embstr编码的字符串对象）
     c->argv[2] = tryObjectEncoding(c->argv[2]);
 
     setGenericCommand(c,flags,c->argv[1],c->argv[2],expire,unit,NULL,NULL);
 }
 
 void setnxCommand(redisClient *c) {
+    // argv也都是robj，对value对象尝试编码（尽量转换成int编码或embstr编码的字符串对象）
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c,REDIS_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);
+    setGenericCommand(c,REDIS_SET_NX,c->argv[1],c->argv[2],NULL,0,shared.cone,shared.czero);//设置SET_NX的flag
 }
 
 void setexCommand(redisClient *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);
+    c->argv[3] = tryObjectEncoding(c->argv[3]);// argv也都是robj，对value对象尝试编码（尽量转换成int编码或embstr编码的字符串对象）
+    setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_SECONDS,NULL,NULL);//按秒为单位
 }
 
 void psetexCommand(redisClient *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);
+    c->argv[3] = tryObjectEncoding(c->argv[3]);// argv也都是robj，对value对象尝试编码（尽量转换成int编码或embstr编码的字符串对象）
+    setGenericCommand(c,REDIS_SET_NO_FLAGS,c->argv[1],c->argv[3],c->argv[2],UNIT_MILLISECONDS,NULL,NULL);//按毫秒为单位
 }
 
+//从db中看c->argv[1]对应的value是否存在（仅对字符串对象有效），找到value的话放入client的回复中
 int getGenericCommand(redisClient *c) {
     robj *o;
 
@@ -203,13 +190,13 @@ int getGenericCommand(redisClient *c) {
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL)
         return REDIS_OK;
 
-    // 值对象存在，检查它的类型
+    // 值对象存在，检查它的类型，get必须操作字符串对象
     if (o->type != REDIS_STRING) {
         // 类型错误
         addReply(c,shared.wrongtypeerr);
         return REDIS_ERR;
     } else {
-        // 类型正确，向客户端返回对象的值
+        // 类型正确，向客户端返回对象的值，将对象o返回给客户端
         addReplyBulk(c,o);
         return REDIS_OK;
     }
@@ -219,14 +206,13 @@ void getCommand(redisClient *c) {
     getGenericCommand(c);
 }
 
+//返回key对应的value并设置新value
 void getsetCommand(redisClient *c) {
-
-    // 取出并返回键的值对象
+    // 取出并返回键的值对象给c的回复中，键不存在直接返回
     if (getGenericCommand(c) == REDIS_ERR) return;
 
-    // 编码键的新值 c->argv[2]
+    // 编码键的新值 c->argv[2]，尽量节约内存
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-
     // 将数据库中关联键 c->argv[1] 和新值对象 c->argv[2]
     setKey(c->db,c->argv[1],c->argv[2]);
 
@@ -241,13 +227,13 @@ void setrangeCommand(redisClient *c) {
     robj *o;
     long offset;
 
-    sds value = c->argv[3]->ptr;
+    sds value = c->argv[3]->ptr;//value值
 
     // 取出 offset 参数
     if (getLongFromObjectOrReply(c,c->argv[2],&offset,NULL) != REDIS_OK)
         return;
 
-    // 检查 offset 参数
+    // 检查 offset 参数，小于0直接回复错误
     if (offset < 0) {
         addReplyError(c,"offset is out of range");
         return;
@@ -256,9 +242,7 @@ void setrangeCommand(redisClient *c) {
     // 取出键现在的值对象
     o = lookupKeyWrite(c->db,c->argv[1]);
     if (o == NULL) {
-
         // 键不存在于数据库中。。。
-
         /* Return 0 when setting nothing on a non-existing string */
         // value 为空，没有什么可设置的，向客户端返回 0
         if (sdslen(value) == 0) {
@@ -267,8 +251,7 @@ void setrangeCommand(redisClient *c) {
         }
 
         /* Return when the resulting string exceeds allowed size */
-        // 如果设置后的长度会超过 Redis 的限制的话
-        // 那么放弃设置，向客户端发送一个出错回复
+        // 如果设置后的长度会超过 Redis 的限制的话，那么放弃设置，向客户端发送一个出错回复
         if (checkStringLength(c,offset+sdslen(value)) != REDIS_OK)
             return;
 
