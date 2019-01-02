@@ -39,14 +39,11 @@ void signalListAsReady(redisClient *c, robj *key);
  * to a real list. Only check raw-encoded objects because integer encoded
  * objects are never too long. 
  *
- * 对输入值 value 进行检查，看是否需要将 subject 从 ziplist 转换为双端链表，
- * 以便保存值 value 。
- *
- * 函数只对 REDIS_ENCODING_RAW 编码的 value 进行检查，
- * 因为整数编码的值不可能超长。
+ * 对输入值 value 进行检查，看是否需要将 subject 从 ziplist 转换为双端链表(看value字符串长度是否大于64字节)
+ * 如果大于64字节，那么将subject从ziplist转换为Linkedlist编码
+ * 函数只对 REDIS_ENCODING_RAW 编码的 value 进行检查， 因为整数编码的值不可能超长（长度小于21个字符）
  */
 void listTypeTryConversion(robj *subject, robj *value) {
-
     // 确保 subject 为 ZIPLIST 编码
     if (subject->encoding != REDIS_ENCODING_ZIPLIST) return;
 
@@ -59,45 +56,43 @@ void listTypeTryConversion(robj *subject, robj *value) {
 
 /* The function pushes an element to the specified list object 'subject',
  * at head or tail position as specified by 'where'.
- *
  * 将给定元素添加到列表的表头或表尾。
- *
  * 参数 where 决定了新元素添加的位置：
- *
  *  - REDIS_HEAD 将新元素添加到表头
- *
  *  - REDIS_TAIL 将新元素添加到表尾
- *
  * There is no need for the caller to increment the refcount of 'value' as
  * the function takes care of it if needed. 
- *
  * 调用者无须担心 value 的引用计数，因为这个函数会负责这方面的工作。
+ *添加value到列表对象subject中，需要先看看要不要从ziplist转码到linkedlist。
  */
 void listTypePush(robj *subject, robj *value, int where) {
-
     /* Check if we need to convert the ziplist */
-    // 是否需要转换编码？
+    // 是否需要转换编码？从ziplist转到linkedlist
     listTypeTryConversion(subject,value);
 
+    //如果是ziplist编码，并且ziplist元素个数大于512，那么也从ziplist转码到linkedlist
     if (subject->encoding == REDIS_ENCODING_ZIPLIST &&
         ziplistLen(subject->ptr) >= server.list_max_ziplist_entries)
             listTypeConvert(subject,REDIS_ENCODING_LINKEDLIST);
 
-    // ZIPLIST
+    // ZIPLIST编码
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         int pos = (where == REDIS_HEAD) ? ZIPLIST_HEAD : ZIPLIST_TAIL;
-        // 取出对象的值，因为 ZIPLIST 只能保存字符串或整数
+        // 将int编码的字符串转换成raw或embstr编码的字符串对象
         value = getDecodedObject(value);
-        subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos);
-        decrRefCount(value);
+        ////添加到ziplist中(push过程中会尝试将字符串转换成整数，如果字符串对象是int编码的ptr=1234，那么必须转换成字符串"1234"
+        //然后再push到ziplist中）
+        subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),pos); 
+        decrRefCount(value); //减少引用计数，因为value不再需要了
 
-    // 双端链表
+    // 双端链表编码
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
-        if (where == REDIS_HEAD) {
+        if (where == REDIS_HEAD) { //添加到链表头部
             listAddNodeHead(subject->ptr,value);
-        } else {
+        } else { //添加到链表尾部
             listAddNodeTail(subject->ptr,value);
         }
+        //添加引用计数（因为value被链入链表中）
         incrRefCount(value);
 
     // 未知编码
@@ -108,18 +103,14 @@ void listTypePush(robj *subject, robj *value, int where) {
 
 /*
  * 从列表的表头或表尾中弹出一个元素。
- *
  * 参数 where 决定了弹出元素的位置： 
- *
  *  - REDIS_HEAD 从表头弹出
- *
  *  - REDIS_TAIL 从表尾弹出
  */
 robj *listTypePop(robj *subject, int where) {
-
     robj *value = NULL;
 
-    // ZIPLIST
+    // ZIPLIST编码
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         unsigned char *p;
         unsigned char *vstr;
@@ -131,10 +122,12 @@ robj *listTypePop(robj *subject, int where) {
 
         p = ziplistIndex(subject->ptr,pos);
         if (ziplistGet(p,&vstr,&vlen,&vlong)) {
-            // 为被弹出元素创建对象
+            // 为被弹出元素创建对象，新创建的对象的引用计数是1，返回给调用者使用
             if (vstr) {
+                //是字符串，创建字符串对象-raw或embstr编码
                 value = createStringObject((char*)vstr,vlen);
             } else {
+                //是整数，创建字符串对象（能用int编码就用int编码）
                 value = createStringObjectFromLongLong(vlong);
             }
             /* We only need to delete an element when it exists */
@@ -144,11 +137,9 @@ robj *listTypePop(robj *subject, int where) {
 
     // 双端链表
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
-
         list *list = subject->ptr;
-
         listNode *ln;
-
+        //获得链表节点
         if (where == REDIS_HEAD) {
             ln = listFirst(list);
         } else {
@@ -157,11 +148,12 @@ robj *listTypePop(robj *subject, int where) {
 
         // 删除被弹出节点
         if (ln != NULL) {
-            value = listNodeValue(ln);
-            incrRefCount(value);
-            listDelNode(list,ln);
+            value = listNodeValue(ln);//获得节点的字符串对象
+            incrRefCount(value);//增加这个对象的引用计数
+            listDelNode(list,ln);//删除链表节点，会触发free节点的函数，内部会减少value的引用计数
+            //因为删除链表节点会减少节点的引用计数，所以调用incrRefCount来增加下引用计数（因为函数返回值
+            //会用到这个对象），这样value的引用计数其实没变。
         }
-
     // 未知编码
     } else {
         redisPanic("Unknown list encoding");
@@ -175,15 +167,12 @@ robj *listTypePop(robj *subject, int where) {
  * 返回列表的节点数量
  */
 unsigned long listTypeLength(robj *subject) {
-
     // ZIPLIST
     if (subject->encoding == REDIS_ENCODING_ZIPLIST) {
         return ziplistLen(subject->ptr);
-
     // 双端链表
     } else if (subject->encoding == REDIS_ENCODING_LINKEDLIST) {
         return listLength((list*)subject->ptr);
-
     // 未知编码
     } else {
         redisPanic("Unknown list encoding");
@@ -191,33 +180,26 @@ unsigned long listTypeLength(robj *subject) {
 }
 
 /* Initialize an iterator at the specified index.
- *
  * 创建并返回一个列表迭代器。
- *
  * 参数 index 决定开始迭代的列表索引。
- *
  * 参数 direction 则决定了迭代的方向。
- *
  * listTypeIterator 于 redis.h 文件中定义。
  */
 listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char direction) {
-
-    listTypeIterator *li = zmalloc(sizeof(listTypeIterator));
+    listTypeIterator *li = zmalloc(sizeof(listTypeIterator)); //分配迭代器内存
 
     li->subject = subject;
-
     li->encoding = subject->encoding;
-
     li->direction = direction;
 
     // ZIPLIST
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
         li->zi = ziplistIndex(subject->ptr,index);
-
+        
     // 双端链表
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         li->ln = listIndex(subject->ptr,index);
-
+        
     // 未知编码
     } else {
         redisPanic("Unknown list encoding");
@@ -227,8 +209,7 @@ listTypeIterator *listTypeInitIterator(robj *subject, long index, unsigned char 
 }
 
 /* Clean up the iterator. 
- *
- * 释放迭代器
+ * 释放列表迭代器内存
  */
 void listTypeReleaseIterator(listTypeIterator *li) {
     zfree(li);
@@ -237,20 +218,16 @@ void listTypeReleaseIterator(listTypeIterator *li) {
 /* Stores pointer to current the entry in the provided entry structure
  * and advances the position of the iterator. Returns 1 when the current
  * entry is in fact an entry, 0 otherwise. 
- *
  * 使用 entry 结构记录迭代器当前指向的节点，并将迭代器的指针移动到下一个元素。
- *
- * 如果列表中还有元素可迭代，那么返回 1 ，否则，返回 0 。
+ * 如果当前entry是实际的节点返回1，否则返回0
  */
 int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
     /* Protect from converting when iterating */
     redisAssert(li->subject->encoding == li->encoding);
-
     entry->li = li;
 
     // 迭代 ZIPLIST
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
-
         // 记录当前节点到 entry
         entry->zi = li->zi;
 
@@ -265,10 +242,8 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
 
     // 迭代双端链表
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
-
         // 记录当前节点到 entry
         entry->ln = li->ln;
-
         // 移动迭代器的指针
         if (entry->ln != NULL) {
             if (li->direction == REDIS_TAIL)
@@ -288,15 +263,10 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
 }
 
 /* Return entry or NULL at the current position of the iterator. 
- *
- * 返回 entry 结构当前所保存的列表节点。
- *
- * 如果 entry 没有记录任何节点，那么返回 NULL 。
+ * 返回 entry 结构当前所保存的列表节点。 如果 entry 没有记录任何节点，那么返回 NULL 。
  */
 robj *listTypeGet(listTypeEntry *entry) {
-
     listTypeIterator *li = entry->li;
-
     robj *value = NULL;
 
     // 根据索引，从 ZIPLIST 中取出节点的值
@@ -307,8 +277,10 @@ robj *listTypeGet(listTypeEntry *entry) {
         redisAssert(entry->zi != NULL);
         if (ziplistGet(entry->zi,&vstr,&vlen,&vlong)) {
             if (vstr) {
+                //如果是字符串对象，创建出vale
                 value = createStringObject((char*)vstr,vlen);
             } else {
+                //如果是long long，创建字符串对象（尽量使用int编码，否则使用raw或embstr编码）
                 value = createStringObjectFromLongLong(vlong);
             }
         }
@@ -316,8 +288,8 @@ robj *listTypeGet(listTypeEntry *entry) {
     // 从双端链表中取出节点的值
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         redisAssert(entry->ln != NULL);
-        value = listNodeValue(entry->ln);
-        incrRefCount(value);
+        value = listNodeValue(entry->ln); //获得链表节点指向的value
+        incrRefCount(value); //会被外部使用，所以增加引用计数
 
     } else {
         redisPanic("Unknown list encoding");
@@ -328,49 +300,45 @@ robj *listTypeGet(listTypeEntry *entry) {
 
 /*
  * 将对象 value 插入到列表节点的之前或之后。
- *
  * where 参数决定了插入的位置：
- *
  *  - REDIS_HEAD 插入到节点之前
- *
  *  - REDIS_TAIL 插入到节点之后
  */
 void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
-
-    robj *subject = entry->li->subject;
+    robj *subject = entry->li->subject;//列表对象
 
     // 插入到 ZIPLIST
     if (entry->li->encoding == REDIS_ENCODING_ZIPLIST) {
-
-        // 返回对象未编码的值
+        // 将int编码的字符串转换成raw或embstr编码的字符串对象
         value = getDecodedObject(value);
-
         if (where == REDIS_TAIL) {
             unsigned char *next = ziplistNext(subject->ptr,entry->zi);
-
             /* When we insert after the current element, but the current element
              * is the tail of the list, we need to do a push. */
             if (next == NULL) {
                 // next 是表尾节点，push 新节点到表尾
                 subject->ptr = ziplistPush(subject->ptr,value->ptr,sdslen(value->ptr),REDIS_TAIL);
             } else {
-                // 插入到到节点之后
+                // 插入到next前面，即当前节点后面
                 subject->ptr = ziplistInsert(subject->ptr,next,value->ptr,sdslen(value->ptr));
             }
         } else {
+            //插入到entry的前面
             subject->ptr = ziplistInsert(subject->ptr,entry->zi,value->ptr,sdslen(value->ptr));
         }
         decrRefCount(value);
 
     // 插入到双端链表
     } else if (entry->li->encoding == REDIS_ENCODING_LINKEDLIST) {
-
         if (where == REDIS_TAIL) {
+            //插入entry后面
             listInsertNode(subject->ptr,entry->ln,value,AL_START_TAIL);
         } else {
+            //插入到entry前面
             listInsertNode(subject->ptr,entry->ln,value,AL_START_HEAD);
         }
 
+        //增加value的引用计数，因为链表节点的value指针也连向value
         incrRefCount(value);
 
     } else {
@@ -379,19 +347,17 @@ void listTypeInsert(listTypeEntry *entry, robj *value, int where) {
 }
 
 /* Compare the given object with the entry at the current position. 
- *
- * 将当前节点的值和对象 o 进行对比
- *
- * 函数在两值相等时返回 1 ，不相等时返回 0 。
+ * 将当前节点的值和对象 o 进行对比。函数在两值相等时返回 1 ，不相等时返回 0 。
  */
 int listTypeEqual(listTypeEntry *entry, robj *o) {
-
     listTypeIterator *li = entry->li;
 
+    //都是ziplist编码，调用ziplist比较节点的方法
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
-        redisAssertWithInfo(NULL,o,sdsEncodedObject(o));
+        redisAssertWithInfo(NULL,o,sdsEncodedObject(o)); //o必须是字符串对象
         return ziplistCompare(entry->zi,o->ptr,sdslen(o->ptr));
 
+    //都是linkedlist编码，比较2个字符串对象是否相等
     } else if (li->encoding == REDIS_ENCODING_LINKEDLIST) {
         return equalStringObjects(o,listNodeValue(entry->ln));
 
@@ -401,37 +367,31 @@ int listTypeEqual(listTypeEntry *entry, robj *o) {
 }
 
 /* Delete the element pointed to. 
- *
  * 删除 entry 所指向的节点
  */
 void listTypeDelete(listTypeEntry *entry) {
-
     listTypeIterator *li = entry->li;
 
-    // ZIPLIST
+    // ZIPLIST编码
     if (li->encoding == REDIS_ENCODING_ZIPLIST) {
-
         unsigned char *p = entry->zi;
-
-        li->subject->ptr = ziplistDelete(li->subject->ptr,&p);
+        li->subject->ptr = ziplistDelete(li->subject->ptr,&p);//从ziplist删除节点，p保留删除节点的下个节点地址
 
         /* Update position of the iterator depending on the direction */
         // 删除节点之后，更新迭代器的指针
         if (li->direction == REDIS_TAIL)
-            li->zi = p;
+            li->zi = p; //尾部迭代器，指向删除节点的下个节点
         else
-            li->zi = ziplistPrev(li->subject->ptr,p);
+            li->zi = ziplistPrev(li->subject->ptr,p); //从后向前的迭代器，指向删除节点的前一个节点
 
     // 双端链表
     } else if (entry->li->encoding == REDIS_ENCODING_LINKEDLIST) {
-
         // 记录后置节点
         listNode *next;
-
         if (li->direction == REDIS_TAIL)
-            next = entry->ln->next;
+            next = entry->ln->next; //记录下个节点到迭代器
         else
-            next = entry->ln->prev;
+            next = entry->ln->prev; //记录前个节点到迭代器
 
         // 删除当前节点
         listDelNode(li->subject->ptr,entry->ln);
@@ -448,32 +408,27 @@ void listTypeDelete(listTypeEntry *entry) {
  * 将列表的底层编码从 ziplist 转换成双端链表
  */
 void listTypeConvert(robj *subject, int enc) {
-
     listTypeIterator *li;
-
     listTypeEntry entry;
+    redisAssertWithInfo(NULL,subject,subject->type == REDIS_LIST); //必须是列表对象
 
-    redisAssertWithInfo(NULL,subject,subject->type == REDIS_LIST);
-
-    // 转换成双端链表
+    // 目标是转换成双端链表
     if (enc == REDIS_ENCODING_LINKEDLIST) {
-
-        list *l = listCreate();
-
-        listSetFreeMethod(l,decrRefCountVoid);
+        list *l = listCreate();//创建链表
+        listSetFreeMethod(l,decrRefCountVoid);//设置链表节点的free回调函数（其实是减少引用计数）
 
         /* listTypeGet returns a robj with incremented refcount */
         // 遍历 ziplist ，并将里面的值全部添加到双端链表中
-        li = listTypeInitIterator(subject,0,REDIS_TAIL);
+        li = listTypeInitIterator(subject,0,REDIS_TAIL); //初始化ziplist的迭代器
+        //遍历ziplist，listTypeGet从相应ziplist节点拿出字符串对象，添加到双端链表中
         while (listTypeNext(li,&entry)) listAddNodeTail(l,listTypeGet(&entry));
-        listTypeReleaseIterator(li);
+        listTypeReleaseIterator(li); //释放迭代器
 
         // 更新编码
         subject->encoding = REDIS_ENCODING_LINKEDLIST;
 
         // 释放原来的 ziplist
         zfree(subject->ptr);
-
         // 更新对象值指针
         subject->ptr = l;
 
