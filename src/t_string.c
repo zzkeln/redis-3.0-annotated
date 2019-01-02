@@ -223,13 +223,14 @@ void getsetCommand(redisClient *c) {
     server.dirty++;
 }
 
+// setrange key offset value。内部值字符串长度如果不够会进行扩展，然后用memcpy将新值赋值过去。
 void setrangeCommand(redisClient *c) {
     robj *o;
     long offset;
 
     sds value = c->argv[3]->ptr;//value值
 
-    // 取出 offset 参数
+    // 取出 offset 参数，失败的话直接返回
     if (getLongFromObjectOrReply(c,c->argv[2],&offset,NULL) != REDIS_OK)
         return;
 
@@ -251,7 +252,7 @@ void setrangeCommand(redisClient *c) {
         }
 
         /* Return when the resulting string exceeds allowed size */
-        // 如果设置后的长度会超过 Redis 的限制的话，那么放弃设置，向客户端发送一个出错回复
+        // 如果设置后的长度会超过 Redis 的限制的话，那么放弃设置，向客户端发送一个出错回复（512M限制）
         if (checkStringLength(c,offset+sdslen(value)) != REDIS_OK)
             return;
 
@@ -261,11 +262,10 @@ void setrangeCommand(redisClient *c) {
         dbAdd(c->db,c->argv[1],o);
     } else {
         size_t olen;
-
         // 值对象存在。。。
 
         /* Key exists, check type */
-        // 检查值对象的类型
+        // 检查值对象的类型，必须是字符串对象
         if (checkType(c,o,REDIS_STRING))
             return;
 
@@ -281,7 +281,7 @@ void setrangeCommand(redisClient *c) {
 
         /* Return when the resulting string exceeds allowed size */
         // 如果设置后的长度会超过 Redis 的限制的话
-        // 那么放弃设置，向客户端发送一个出错回复
+        // 那么放弃设置，向客户端发送一个出错回复.设置后的字符串长度是 offset+sdslen(value)
         if (checkStringLength(c,offset+sdslen(value)) != REDIS_OK)
             return;
 
@@ -292,9 +292,9 @@ void setrangeCommand(redisClient *c) {
     // 这里的 sdslen(value) > 0 其实可以去掉
     // 前面已经做了检测了
     if (sdslen(value) > 0) {
-        // 扩展字符串值对象
+        // 扩展字符串值对象，先将ptr的字符串扩展到offset+sdslen(value)这么大的长度
         o->ptr = sdsgrowzero(o->ptr,offset+sdslen(value));
-        // 将 value 复制到字符串中的指定的位置
+        // 将 value 复制到字符串中的指定的位置，复制到ptr+offset处，长度是sdslen(value)
         memcpy((char*)o->ptr+offset,value,sdslen(value));
 
         // 向数据库发送键被修改的信号
@@ -308,14 +308,15 @@ void setrangeCommand(redisClient *c) {
         server.dirty++;
     }
 
-    // 设置成功，返回新的字符串值给客户端
+    // 设置成功，返回新的字符串值给客户端，返回值的长度给客户端
     addReplyLongLong(c,sdslen(o->ptr));
 }
 
+// getrange key start end，获得key在[start, end]的字符串
 void getrangeCommand(redisClient *c) {
     robj *o;
     long start, end;
-    char *str, llbuf[32];
+    char *str, llbuf[32];//用于放int编码的字符串（最多21个字符）
     size_t strlen;
 
     // 取出 start 参数
@@ -326,11 +327,12 @@ void getrangeCommand(redisClient *c) {
     if (getLongFromObjectOrReply(c,c->argv[3],&end,NULL) != REDIS_OK)
         return;
 
-    // 从数据库中查找键 c->argv[1] 
+    // 从数据库中查找键 c->argv[1]。如果键不存在或者类型不是字符串对象那么直接返回
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.emptybulk)) == NULL ||
         checkType(c,o,REDIS_STRING)) return;
 
     // 根据编码，对对象的值进行处理
+    //如果是int编码，转换成字符串
     if (o->encoding == REDIS_ENCODING_INT) {
         str = llbuf;
         strlen = ll2string(llbuf,sizeof(llbuf),(long)o->ptr);
@@ -345,7 +347,7 @@ void getrangeCommand(redisClient *c) {
     if (end < 0) end = strlen+end;
     if (start < 0) start = 0;
     if (end < 0) end = 0;
-    if ((unsigned)end >= strlen) end = strlen-1;
+    if ((unsigned)end >= strlen) end = strlen-1; //超过字符串长度则截断end到最后一个字符
 
     /* Precondition: end >= 0 && end < strlen, so the only condition where
      * nothing can be returned is: start > end. */
@@ -354,15 +356,17 @@ void getrangeCommand(redisClient *c) {
         addReply(c,shared.emptybulk);
     } else {
         // 向客户端返回给定范围内的字符串内容
+        //走到这里肯定 end < strlen并且0 <= start <= end。取出从str+start开始的(end-start+1)字节数的字符串
         addReplyBulkCBuffer(c,(char*)str+start,end-start+1);
     }
 }
 
+//依次查找key是否存在，如果存在将值字符串添加到回复中
 void mgetCommand(redisClient *c) {
     int j;
 
     addReplyMultiBulkLen(c,c->argc-1);
-    // 查找并返回所有输入键的值
+    // 查找并返回所有输入键的值，依次查找key
     for (j = 1; j < c->argc; j++) {
         // 查找键 c->argc[j] 的值
         robj *o = lookupKeyRead(c->db,c->argv[j]);
@@ -371,16 +375,17 @@ void mgetCommand(redisClient *c) {
             addReply(c,shared.nullbulk);
         } else {
             if (o->type != REDIS_STRING) {
-                // 值存在，但不是字符串类型
+                // 值存在，但不是字符串类型，添加空回复
                 addReply(c,shared.nullbulk);
             } else {
-                // 值存在，并且是字符串
+                // 值存在，并且是字符串，添加到client的回复中
                 addReplyBulk(c,o);
             }
         }
     }
 }
 
+//依次添加键值对 ，nx=1表示启用nx
 void msetGenericCommand(redisClient *c, int nx) {
     int j, busykeys = 0;
 
@@ -392,26 +397,24 @@ void msetGenericCommand(redisClient *c, int nx) {
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set nothing at all if at least one already key exists. */
     // 如果 nx 参数为真，那么检查所有输入键在数据库中是否存在
-    // 只要有一个键是存在的，那么就向客户端发送空回复
-    // 并放弃执行接下来的设置操作
+    // 只要有一个键是存在的，那么就向客户端发送空回复，并放弃执行接下来的设置操作
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
             if (lookupKeyWrite(c->db,c->argv[j]) != NULL) {
                 busykeys++;
+                //这里可以优化下，来个break！！！
             }
         }
-        // 键存在
-        // 发送空白回复，并放弃执行接下来的设置操作
+        // 键存在，发送空白回复，并放弃执行接下来的设置操作
         if (busykeys) {
             addReply(c, shared.czero);
             return;
         }
     }
 
-    // 设置所有键值对
+    // 依次设置所有键值对
     for (j = 1; j < c->argc; j += 2) {
-
-        // 对值对象进行解码
+        // 对值对象进行解码，尝试用int或embstr进行字符串编码
         c->argv[j+1] = tryObjectEncoding(c->argv[j+1]);
 
         // 将键值对关联到数据库
@@ -430,15 +433,16 @@ void msetGenericCommand(redisClient *c, int nx) {
     // MSET 返回 OK ，而 MSETNX 返回 1
     addReply(c, nx ? shared.cone : shared.ok);
 }
-
+//单纯的mset
 void msetCommand(redisClient *c) {
     msetGenericCommand(c,0);
 }
-
+//mset + nx
 void msetnxCommand(redisClient *c) {
     msetGenericCommand(c,1);
 }
 
+//对value+incr，检查long的整数是否溢出
 void incrDecrCommand(redisClient *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
@@ -446,10 +450,10 @@ void incrDecrCommand(redisClient *c, long long incr) {
     // 取出值对象
     o = lookupKeyWrite(c->db,c->argv[1]);
 
-    // 检查对象是否存在，以及类型是否正确
+    // 检查对象是否存在，以及类型是否正确。如果对象不存在或者类型不是字符串对象，直接返回
     if (o != NULL && checkType(c,o,REDIS_STRING)) return;
 
-    // 取出对象的整数值，并保存到 value 参数中
+    // 取出对象的整数值，并保存到 value 参数中。取出long long类型，如果失败直接返回
     if (getLongLongFromObjectOrReply(c,o,&value,NULL) != REDIS_OK) return;
 
     // 检查加法操作执行之后值释放会溢出
@@ -457,6 +461,7 @@ void incrDecrCommand(redisClient *c, long long incr) {
     oldvalue = value;
     if ((incr < 0 && oldvalue < 0 && incr < (LLONG_MIN-oldvalue)) ||
         (incr > 0 && oldvalue > 0 && incr > (LLONG_MAX-oldvalue))) {
+        //如果溢出的话 直接返回了
         addReplyError(c,"increment or decrement would overflow");
         return;
     }
@@ -465,6 +470,7 @@ void incrDecrCommand(redisClient *c, long long incr) {
     // 然后用新的值对象替换原来的值对象
     value += incr;
     new = createStringObjectFromLongLong(value);
+    //将new关联到key上
     if (o)
         dbOverwrite(c->db,c->argv[1],new);
     else
@@ -485,21 +491,22 @@ void incrDecrCommand(redisClient *c, long long incr) {
     addReply(c,shared.crlf);
 }
 
+//调用上面的函数
 void incrCommand(redisClient *c) {
     incrDecrCommand(c,1);
 }
-
+//调用上面的函数
 void decrCommand(redisClient *c) {
     incrDecrCommand(c,-1);
 }
-
+//根据参数来进行incr
 void incrbyCommand(redisClient *c) {
     long long incr;
-
+    //拿出incr的值，如果错误直接返回
     if (getLongLongFromObjectOrReply(c, c->argv[2], &incr, NULL) != REDIS_OK) return;
     incrDecrCommand(c,incr);
 }
-
+//根据参数进行decr
 void decrbyCommand(redisClient *c) {
     long long incr;
 
@@ -514,11 +521,11 @@ void incrbyfloatCommand(redisClient *c) {
     // 取出值对象
     o = lookupKeyWrite(c->db,c->argv[1]);
 
-    // 检查对象是否存在，以及类型是否正确
+    // 检查对象是否存在，以及类型是否正确。对象不存在或者不是字符串对象，那么直接返回
     if (o != NULL && checkType(c,o,REDIS_STRING)) return;
 
     // 将对象的整数值保存到 value 参数中
-    // 并取出 incr 参数的值
+    // 并取出 incr 参数的值。都转换成 long double
     if (getLongDoubleFromObjectOrReply(c,o,&value,NULL) != REDIS_OK ||
         getLongDoubleFromObjectOrReply(c,c->argv[2],&incr,NULL) != REDIS_OK)
         return;
@@ -572,30 +579,30 @@ void appendCommand(redisClient *c) {
 
         /* Create the key */
         // 键值对不存在，创建一个新的
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db,c->argv[1],c->argv[2]);
-        incrRefCount(c->argv[2]);
+        c->argv[2] = tryObjectEncoding(c->argv[2]);//尽量用int和embstr来编码字符串对象
+        dbAdd(c->db,c->argv[1],c->argv[2]); //添加到db中
+        incrRefCount(c->argv[2]);//增加引用计数
         totlen = stringObjectLen(c->argv[2]);
     } else {
 
         // 键值对存在。。。
 
         /* Key exists, check type */
-        // 检查类型
+        // 检查类型，value必须是字符串对象
         if (checkType(c,o,REDIS_STRING))
             return;
 
         /* "append" is an argument, so always an sds */
         // 检查追加操作之后，字符串的长度是否符合 Redis 的限制
         append = c->argv[2];
-        totlen = stringObjectLen(o)+sdslen(append->ptr);
-        if (checkStringLength(c,totlen) != REDIS_OK)
+        totlen = stringObjectLen(o)+sdslen(append->ptr); //append后的大小
+        if (checkStringLength(c,totlen) != REDIS_OK) //超过512M后，直接返回
             return;
 
         /* Append the value */
         // 执行追加操作
         o = dbUnshareStringValue(c->db,c->argv[1],o);
-        o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));
+        o->ptr = sdscatlen(o->ptr,append->ptr,sdslen(append->ptr));//将append追加到o中
         totlen = sdslen(o->ptr);
     }
 
@@ -615,7 +622,7 @@ void appendCommand(redisClient *c) {
 void strlenCommand(redisClient *c) {
     robj *o;
 
-    // 取出值对象，并进行类型检查
+    // 取出值对象，并进行类型检查。对象必须存在且是字符串对象
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_STRING)) return;
 
