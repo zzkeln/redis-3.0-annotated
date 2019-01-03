@@ -377,10 +377,11 @@ void saddCommand(redisClient *c) {
 
     // 对象不存在，创建一个新的，并将它关联到数据库
     if (set == NULL) {
+        //根据参数看看是创建intset编码还是dict编码的集合对象，但仅根据argv[2]来看，后面还有其它add的元素
         set = setTypeCreate(c->argv[2]);
         dbAdd(c->db,c->argv[1],set);
 
-    // 对象存在，检查类型
+    // 对象存在，检查类型，必须是集合对象
     } else {
         if (set->type != REDIS_SET) {
             addReply(c,shared.wrongtypeerr);
@@ -390,9 +391,9 @@ void saddCommand(redisClient *c) {
 
     // 将所有输入元素添加到集合中
     for (j = 2; j < c->argc; j++) {
-        c->argv[j] = tryObjectEncoding(c->argv[j]);
+        c->argv[j] = tryObjectEncoding(c->argv[j]);//对参数进行int>embstr>raw字符串编码，节约内存
         // 只有元素未存在于集合时，才算一次成功添加
-        if (setTypeAdd(set,c->argv[j])) added++;
+        if (setTypeAdd(set,c->argv[j])) added++;//添加到集合中
     }
 
     // 如果有至少一个元素被成功添加，那么执行以下程序
@@ -402,10 +403,8 @@ void saddCommand(redisClient *c) {
         // 发送事件通知
         notifyKeyspaceEvent(REDIS_NOTIFY_SET,"sadd",c->argv[1],c->db->id);
     }
-
     // 将数据库设为脏
     server.dirty += added;
-
     // 返回添加元素的数量
     addReplyLongLong(c,added);
 }
@@ -414,13 +413,12 @@ void sremCommand(redisClient *c) {
     robj *set;
     int j, deleted = 0, keyremoved = 0;
 
-    // 取出集合对象
+    // 取出集合对象，集合对象不存在或者类型不是集合对象，直接返回
     if ((set = lookupKeyWriteOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,set,REDIS_SET)) return;
 
     // 删除输入的所有元素
     for (j = 2; j < c->argc; j++) {
-        
         // 只有元素在集合中时，才算一次成功删除
         if (setTypeRemove(set,c->argv[j])) {
             deleted++;
@@ -445,12 +443,11 @@ void sremCommand(redisClient *c) {
                                 c->db->id);
         // 将数据库设为脏
         server.dirty += deleted;
-    }
-    
+    } 
     // 将被成功删除元素的数量作为回复
     addReplyLongLong(c,deleted);
 }
-
+// smove src des member
 void smoveCommand(redisClient *c) {
     robj *srcset, *dstset, *ele;
 
@@ -459,11 +456,11 @@ void smoveCommand(redisClient *c) {
     // 取出目标集合
     dstset = lookupKeyWrite(c->db,c->argv[2]);
 
-    // 编码元素
+    // 编码待移动元素，int>embstr>raw编码
     ele = c->argv[3] = tryObjectEncoding(c->argv[3]);
 
     /* If the source key does not exist return 0 */
-    // 源集合不存在，直接返回
+    // 源集合不存在，直接返回。这个可以放在tryObjectEncoding的上面，效率会更高些？
     if (srcset == NULL) {
         addReply(c,shared.czero);
         return;
@@ -471,9 +468,7 @@ void smoveCommand(redisClient *c) {
 
     /* If the source key has the wrong type, or the destination key
      * is set and has the wrong type, return with an error. */
-    // 如果源集合的类型错误
-    // 或者目标集合存在、但是类型错误
-    // 那么直接返回
+    // 如果源集合对象类型不是集合，或者目标集合对象存在且类型不是集合，那么直接返回
     if (checkType(c,srcset,REDIS_SET) ||
         (dstset && checkType(c,dstset,REDIS_SET))) return;
 
@@ -485,8 +480,7 @@ void smoveCommand(redisClient *c) {
     }
 
     /* If the element cannot be removed from the src set, return 0. */
-    // 从源集合中移除目标元素
-    // 如果目标元素不存在于源集合中，那么直接返回
+    // 从源集合中移除目标元素。如果目标元素不存在于源集合中，那么直接返回
     if (!setTypeRemove(srcset,ele)) {
         addReply(c,shared.czero);
         return;
@@ -494,7 +488,6 @@ void smoveCommand(redisClient *c) {
 
     // 发送事件通知
     notifyKeyspaceEvent(REDIS_NOTIFY_SET,"srem",c->argv[1],c->db->id);
-
     /* Remove the src set from the database when empty */
     // 如果源集合已经为空，那么将它从数据库中删除
     if (setTypeSize(srcset) == 0) {
@@ -530,32 +523,31 @@ void smoveCommand(redisClient *c) {
     // 回复 1 
     addReply(c,shared.cone);
 }
-
+//检查元素是否存在集合对象中
 void sismemberCommand(redisClient *c) {
     robj *set;
-
-    // 取出集合对象
+    // 取出集合对象，集合对象不存在或者类型不对，直接返回
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,set,REDIS_SET)) return;
 
-    // 编码输入元素
+    // 编码输入元素：int>embstr>raw编码字符串对象
     c->argv[2] = tryObjectEncoding(c->argv[2]);
 
-    // 检查是否存在
+    // 检查元素是否存在
     if (setTypeIsMember(set,c->argv[2]))
         addReply(c,shared.cone);
     else
         addReply(c,shared.czero);
 }
-
+//获取集合对象元素个数
 void scardCommand(redisClient *c) {
     robj *o;
 
-    // 取出集合
+    // 取出集合，集合对象不存在或者类型不对，直接返回
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.czero)) == NULL ||
         checkType(c,o,REDIS_SET)) return;
 
-    // 返回集合的基数
+    // 返回集合的元素个数
     addReplyLongLong(c,setTypeSize(o));
 }
 
