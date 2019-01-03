@@ -36,66 +36,58 @@
 void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *dstkey, int op);
 
 /* Factory method to return a set that *can* hold "value". 
- *
  * 返回一个可以保存值 value 的集合。
- *
  * When the object has an integer-encodable value, 
  * an intset will be returned. Otherwise a regular hash table. 
- *
  * 当对象的值可以被编码为整数时，返回 intset ，
  * 否则，返回普通的哈希表。
+ * 返回一个可以保存value的集合对象：intset编码（value可以转换成long long类型）或字典编码。
  */
 robj *setTypeCreate(robj *value) {
-
+    //如果字符串对象value可以用long long保存，创建一个intset编码的集合对象并返回
     if (isObjectRepresentableAsLongLong(value,NULL) == REDIS_OK)
         return createIntsetObject();
-
+    //否则创建一个字典编码的集合对象并返回
     return createSetObject();
 }
 
-/*
- * 多态 add 操作
- *
- * 添加成功返回 1 ，如果元素已经存在，返回 0 。
+/* 添加value到集合对象中（可能对集合对象进行intset->dict的转码）
  */
 int setTypeAdd(robj *subject, robj *value) {
     long long llval;
 
-    // 字典
+    // 字典编码的集合对象
     if (subject->encoding == REDIS_ENCODING_HT) {
-        // 将 value 作为键， NULL 作为值，将元素添加到字典中
+        // 键值对value-NULL添加到字典中
         if (dictAdd(subject->ptr,value,NULL) == DICT_OK) {
-            incrRefCount(value);
+            incrRefCount(value);//value的引用计数增加，因为字典节点引用了这个对象
             return 1;
         }
 
-    // intset
-    } else if (subject->encoding == REDIS_ENCODING_INTSET) {
-        
-        // 如果对象的值可以编码为整数的话，那么将对象的值添加到 intset 中
+    // intset编码的集合对象
+    } else if (subject->encoding == REDIS_ENCODING_INTSET) {    
+        // 如果value可以转换成long long类型，那么直接加入到intset中
         if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
             uint8_t success = 0;
-            subject->ptr = intsetAdd(subject->ptr,llval,&success);
+            subject->ptr = intsetAdd(subject->ptr,llval,&success);//添加到intset中
             if (success) {
                 /* Convert to regular set when the intset contains
                  * too many entries. */
-                // 添加成功
-                // 检查集合在添加新元素之后是否需要转换为字典
+                // 添加到intset成功，看看intset元素个数是否超过512个，超过的话需要将集合编码从intset转换成dict
                 if (intsetLen(subject->ptr) > server.set_max_intset_entries)
                     setTypeConvert(subject,REDIS_ENCODING_HT);
                 return 1;
             }
 
-        // 如果对象的值不能编码为整数，那么将集合从 intset 编码转换为 HT 编码
-        // 然后再执行添加操作
+        // 如果value不能转换成long long，那么先将集合对象从intset转换成dict，然后再添加value对象
         } else {
             /* Failed to get integer from object, convert to regular set. */
-            setTypeConvert(subject,REDIS_ENCODING_HT);
+            setTypeConvert(subject,REDIS_ENCODING_HT);//intset->dict编码转换
 
             /* The set *was* an intset and this value is not integer
              * encodable, so dictAdd should always work. */
-            redisAssertWithInfo(NULL,value,dictAdd(subject->ptr,value,NULL) == DICT_OK);
-            incrRefCount(value);
+            redisAssertWithInfo(NULL,value,dictAdd(subject->ptr,value,NULL) == DICT_OK);//添加到dict中
+            incrRefCount(value);//字典节点引用了value，所以引用计数增加1
             return 1;
         }
 
@@ -108,15 +100,13 @@ int setTypeAdd(robj *subject, robj *value) {
     return 0;
 }
 
-/*
- * 多态 remove 操作
- *
+/*从集合对象中删除value
  * 删除成功返回 1 ，因为元素不存在而导致删除失败返回 0 。
  */
 int setTypeRemove(robj *setobj, robj *value) {
     long long llval;
 
-    // HT
+    // dict编码
     if (setobj->encoding == REDIS_ENCODING_HT) {
         // 从字典中删除键（集合元素）
         if (dictDelete(setobj->ptr,value) == DICT_OK) {
@@ -127,7 +117,7 @@ int setTypeRemove(robj *setobj, robj *value) {
 
     // INTSET
     } else if (setobj->encoding == REDIS_ENCODING_INTSET) {
-        // 如果对象的值可以编码为整数的话，那么尝试从 intset 中移除元素
+        // 如果对象可以转换成long long，那么从intset中删除
         if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
             int success;
             setobj->ptr = intsetRemove(setobj->ptr,llval,&success);
@@ -144,55 +134,48 @@ int setTypeRemove(robj *setobj, robj *value) {
 }
 
 /*
- * 多态 ismember 操作
+ * 判断value是否在集合对象中，查找失败返回0，否则返回1
  */
 int setTypeIsMember(robj *subject, robj *value) {
     long long llval;
 
-    // HT
+    // HT编码
     if (subject->encoding == REDIS_ENCODING_HT) {
-        return dictFind((dict*)subject->ptr,value) != NULL;
+        return dictFind((dict*)subject->ptr,value) != NULL; //看看value是否在字典中
 
     // INTSET
     } else if (subject->encoding == REDIS_ENCODING_INTSET) {
-        if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {
-            return intsetFind((intset*)subject->ptr,llval);
+        if (isObjectRepresentableAsLongLong(value,&llval) == REDIS_OK) {//如果value可以转换成long long
+            return intsetFind((intset*)subject->ptr,llval);//看看是否在intset中
         }
-
     // 未知编码
     } else {
         redisPanic("Unknown set encoding");
     }
-
     // 查找失败
     return 0;
 }
 
 /*
- * 创建并返回一个多态集合迭代器
- *
+ * 创建并返回一个集合迭代器
  * setTypeIterator 定义在 redis.h
  */
 setTypeIterator *setTypeInitIterator(robj *subject) {
-
-    setTypeIterator *si = zmalloc(sizeof(setTypeIterator));
+    setTypeIterator *si = zmalloc(sizeof(setTypeIterator));//分配迭代器内存
     
     // 指向被迭代的对象
     si->subject = subject;
-
     // 记录对象的编码
     si->encoding = subject->encoding;
 
     // HT
     if (si->encoding == REDIS_ENCODING_HT) {
-        // 字典迭代器
+        // 获得字典的迭代器
         si->di = dictGetIterator(subject->ptr);
-
     // INTSET
     } else if (si->encoding == REDIS_ENCODING_INTSET) {
-        // 索引
+        // 索引，初始化为0
         si->ii = 0;
-
     // 未知编码
     } else {
         redisPanic("Unknown set encoding");
@@ -203,21 +186,19 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
 }
 
 /*
- * 释放迭代器
+ * 释放集合对象的迭代器
  */
 void setTypeReleaseIterator(setTypeIterator *si) {
-
     if (si->encoding == REDIS_ENCODING_HT)
+        //如果是字典编码，需要释放字典迭代器
         dictReleaseIterator(si->di);
-
+    //释放集合对象的整个迭代器
     zfree(si);
 }
 
 /* Move to the next entry in the set. Returns the object at the current
  * position.
- *
  * 取出被迭代器指向的当前集合元素。
- *
  * Since set elements can be internally be stored as redis objects or
  * simple arrays of integers, setTypeNext returns the encoding of the
  * set object you are iterating, and will populate the appropriate pointer
@@ -225,43 +206,36 @@ void setTypeReleaseIterator(setTypeIterator *si) {
  *
  * 因为集合即可以编码为 intset ，也可以编码为哈希表，
  * 所以程序会根据集合的编码，选择将值保存到那个参数里：
- *
  *  - 当编码为 intset 时，元素被指向到 llobj 参数
- *
  *  - 当编码为哈希表时，元素被指向到 eobj 参数
- *
  * 并且函数会返回被迭代集合的编码，方便识别。
- *
  * When there are no longer elements -1 is returned.
- *
  * 当集合中的元素全部被迭代完毕时，函数返回 -1 。
- *
  * Returned objects ref count is not incremented, so this function is
  * copy on write friendly. 
- *
  * 因为被返回的对象是没有被增加引用计数的，
  * 所以这个函数是对 copy-on-write 友好的。
+ 
+ *将迭代器指向下个元素，如果是intset编码，llele保存当前迭代器的整数，如果是dict编码objele保存当前迭代器的对象
+ *返回迭代器指向集合对象的编码。如果当前迭代器已迭代完，返回-1
  */
 int setTypeNext(setTypeIterator *si, robj **objele, int64_t *llele) {
-
     // 从字典中取出对象
     if (si->encoding == REDIS_ENCODING_HT) {
-
-        // 更新迭代器
+        // de保存迭代器当前指向的对象，让si指向下个对象
         dictEntry *de = dictNext(si->di);
-
         // 字典已迭代完
         if (de == NULL) return -1;
 
-        // 返回节点的键（集合的元素）
+        // 返回当前的对象
         *objele = dictGetKey(de);
 
     // 从 intset 中取出元素
     } else if (si->encoding == REDIS_ENCODING_INTSET) {
+        // llele保存当前迭代器指向的对象，si->ii++是让迭代器指向下个对象
         if (!intsetGet(si->subject->ptr,si->ii++,llele))
             return -1;
     }
-
     // 返回编码
     return si->encoding;
 }
@@ -270,29 +244,26 @@ int setTypeNext(setTypeIterator *si, robj **objele, int64_t *llele) {
  * of setTypeNext() is setTypeNextObject(), returning new objects
  * or incrementing the ref count of returned objects. So if you don't
  * retain a pointer to this object you should call decrRefCount() against it.
- *
  * setTypeNext 的非 copy-on-write 友好版本，
  * 总是返回一个新的、或者已经增加过引用计数的对象。
- *
  * 调用者在使用完对象之后，应该对对象调用 decrRefCount() 。
- *
  * This function is the way to go for write operations where COW is not
  * an issue as the result will be anyway of incrementing the ref count. 
- *
  * 这个函数应该在非 copy-on-write 时调用。
  */
+//返回迭代器si指向的对象，并让si指向下个对象
 robj *setTypeNextObject(setTypeIterator *si) {
     int64_t intele;
     robj *objele;
     int encoding;
 
-    // 取出元素
+    // 取出si指向的对象保存到objele或intele中，根据encoding看保存在哪里
     encoding = setTypeNext(si,&objele,&intele);
     // 总是为元素创建对象
     switch(encoding) {
-        // 已为空
+        // 已为空，返回NULL
         case -1:    return NULL;
-        // INTSET 返回一个整数值，需要为这个值创建对象
+        // INTSET 返回一个整数值，需要为这个值创建对象(int>embstr>raw编码的字符串对象)
         case REDIS_ENCODING_INTSET:
             return createStringObjectFromLongLong(intele);
         // HT 本身已经返回对象了，只需执行 incrRefCount()
@@ -307,76 +278,64 @@ robj *setTypeNextObject(setTypeIterator *si) {
 }
 
 /* Return random element from a non empty set.
- *
  * 从非空集合中随机取出一个元素。
- *
  * The returned element can be a int64_t value if the set is encoded
  * as an "intset" blob of integers, or a redis object if the set
  * is a regular set.
- *
  * 如果集合的编码为 intset ，那么将元素指向 int64_t 指针 llele 。
  * 如果集合的编码为 HT ，那么将元素对象指向对象指针 objele 。
- *
  * The caller provides both pointers to be populated with the right
  * object. The return value of the function is the object->encoding
  * field of the object and is used by the caller to check if the
  * int64_t pointer or the redis object pointer was populated.
- *
  * 函数的返回值为集合的编码方式，通过这个返回值可以知道那个指针保存了元素的值。
- *
  * When an object is returned (the set was a real set) the ref count
  * of the object is not incremented so this function can be considered
  * copy on write friendly. 
- *
  * 因为被返回的对象是没有被增加引用计数的，
  * 所以这个函数是对 copy-on-write 友好的。
  */
+//从集合对象中随机返回一个元素，保存到objele（如果是dict编码）或llele（如果是intset编码），返回集合对象的编码
 int setTypeRandomElement(robj *setobj, robj **objele, int64_t *llele) {
-
     if (setobj->encoding == REDIS_ENCODING_HT) {
+        //如果是dict编码，从字典中随机取出一个节点，返回对象保存到objele中
         dictEntry *de = dictGetRandomKey(setobj->ptr);
         *objele = dictGetKey(de);
 
     } else if (setobj->encoding == REDIS_ENCODING_INTSET) {
+        //如果是intset编码，从intset随机取出整数保存到llele中
         *llele = intsetRandom(setobj->ptr);
 
     } else {
         redisPanic("Unknown set encoding");
     }
-
+    //返回集合对象的编码
     return setobj->encoding;
 }
 
 /*
- * 集合多态 size 函数
+ * 返回集合对象的元素个数
  */
 unsigned long setTypeSize(robj *subject) {
-
     if (subject->encoding == REDIS_ENCODING_HT) {
-        return dictSize((dict*)subject->ptr);
-
+        return dictSize((dict*)subject->ptr); //返回字典中元素个数
     } else if (subject->encoding == REDIS_ENCODING_INTSET) {
-        return intsetLen((intset*)subject->ptr);
-
+        return intsetLen((intset*)subject->ptr);//返回intset中元素个数
     } else {
         redisPanic("Unknown set encoding");
     }
 }
 
 /* Convert the set to specified encoding. 
- *
  * 将集合对象 setobj 的编码转换为 REDIS_ENCODING_HT 。
- *
  * The resulting dict (when converting to a hash table)
  * is presized to hold the number of elements in the original set.
- *
  * 新创建的结果字典会被预先分配为和原来的集合一样大。
  */
 void setTypeConvert(robj *setobj, int enc) {
-
     setTypeIterator *si;
 
-    // 确认类型和编码正确
+    // 确认类型和编码正确，是集合对象和intset编码
     redisAssertWithInfo(NULL,setobj,setobj->type == REDIS_SET &&
                              setobj->encoding == REDIS_ENCODING_INTSET);
 
@@ -387,21 +346,21 @@ void setTypeConvert(robj *setobj, int enc) {
         robj *element;
 
         /* Presize the dict to avoid rehashing */
-        // 预先扩展空间
+        // 预先扩展空间，大小是inset大小
         dictExpand(d,intsetLen(setobj->ptr));
 
         /* To add the elements we extract integers and create redis objects */
         // 遍历集合，并将元素添加到字典中
         si = setTypeInitIterator(setobj);
         while (setTypeNext(si,NULL,&intele) != -1) {
-            element = createStringObjectFromLongLong(intele);
+            element = createStringObjectFromLongLong(intele);//为intele创建字符串对象（int>embstr>raw编码）
             redisAssertWithInfo(NULL,element,dictAdd(d,element,NULL) == DICT_OK);
         }
         setTypeReleaseIterator(si);
 
         // 更新集合的编码
         setobj->encoding = REDIS_ENCODING_HT;
-        zfree(setobj->ptr);
+        zfree(setobj->ptr); //释放intset内存
         // 更新集合的值对象
         setobj->ptr = d;
     } else {
