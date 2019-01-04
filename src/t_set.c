@@ -556,7 +556,7 @@ void spopCommand(redisClient *c) {
     int64_t llele;
     int encoding;
 
-    // 取出集合
+    // 取出集合，集合对象不存在或者类型不对则直接返回
     if ((set = lookupKeyWriteOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
         checkType(c,set,REDIS_SET)) return;
 
@@ -565,10 +565,12 @@ void spopCommand(redisClient *c) {
 
     // 将被取出元素从集合中删除
     if (encoding == REDIS_ENCODING_INTSET) {
+        //如果是intset编码，为llele创建int>embstr>raw的字符串对象
         ele = createStringObjectFromLongLong(llele);
-        set->ptr = intsetRemove(set->ptr,llele,NULL);
+        set->ptr = intsetRemove(set->ptr,llele,NULL);//从intset中删除这个对象
     } else {
         incrRefCount(ele);
+        //从dict中删除ele
         setTypeRemove(set,ele);
     }
 
@@ -593,17 +595,14 @@ void spopCommand(redisClient *c) {
         // 发送事件通知
         notifyKeyspaceEvent(REDIS_NOTIFY_GENERIC,"del",c->argv[1],c->db->id);
     }
-
     // 发送键修改信号
     signalModifiedKey(c->db,c->argv[1]);
-
     // 将数据库设为脏
     server.dirty++;
 }
 
 /* handle the "SRANDMEMBER key <count>" variant. The normal version of the
  * command is handled by the srandmemberCommand() function itself. 
- *
  * 实现 SRANDMEMBER key <count> 变种，
  * 原本的 SRANDMEMBER key 由 srandmemberCommand() 实现
  */
@@ -618,12 +617,12 @@ void spopCommand(redisClient *c) {
  * 更多信息请参考后面的函数定义。
  */
 #define SRANDMEMBER_SUB_STRATEGY_MUL 3
-
+//从集合对象中随机返回count个元素（如果count>0那么返回元素应该不重复，如果count<0返回元素可以重复）
 void srandmemberWithCountCommand(redisClient *c) {
     long l;
     unsigned long count, size;
 
-    // 默认在集合中不包含重复元素
+    // 默认返回结果不能有重复元素
     int uniq = 1;
 
     robj *set, *ele;
@@ -632,7 +631,7 @@ void srandmemberWithCountCommand(redisClient *c) {
 
     dict *d;
 
-    // 取出 l 参数
+    // 取出count参数放入l
     if (getLongFromObjectOrReply(c,c->argv[2],&l,NULL) != REDIS_OK) return;
     if (l >= 0) {
         // l 为正数，表示返回元素各不相同
@@ -642,17 +641,17 @@ void srandmemberWithCountCommand(redisClient *c) {
          * (i.e. don't remove the extracted element after every extraction). */
         // 如果 l 为负数，那么表示返回的结果中可以有重复元素
         count = -l;
-        uniq = 0;
+        uniq = 0;//uniq=0 表示返回结果可以有重复元素
     }
 
-    // 取出集合对象
+    // 取出集合对象，如果集合对象不存在或者类型不是集合则直接返回
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.emptymultibulk))
         == NULL || checkType(c,set,REDIS_SET)) return;
-    // 取出集合基数
+    // 取出集合元素个数
     size = setTypeSize(set);
 
     /* If count is zero, serve it ASAP to avoid special cases later. */
-    // count 为 0 ，直接返回
+    // count 为 0 ，直接返回null
     if (count == 0) {
         addReply(c,shared.emptymultibulk);
         return;
@@ -662,32 +661,29 @@ void srandmemberWithCountCommand(redisClient *c) {
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
      * structures. 
-     *
-     * 情形 1：count 为负数，结果集可以带有重复元素
-     * 直接从集合中取出并返回 N 个随机元素就可以了
-     *
+     * 情形 1：count 为负数，结果集可以带有重复元素，直接从集合中取出并返回 N 个随机元素就可以了
      * 这种情形不需要额外的结构来保存结果集
      */
     if (!uniq) {
         addReplyMultiBulkLen(c,count);
-
         while(count--) {
             // 取出随机元素
             encoding = setTypeRandomElement(set,&ele,&llele);
             if (encoding == REDIS_ENCODING_INTSET) {
+                //如果是intset编码，添加llele到回复中
                 addReplyBulkLongLong(c,llele);
             } else {
+                //如果是dict编码，添加ele到回复中
                 addReplyBulk(c,ele);
             }
         }
-
+        //直接返回
         return;
     }
 
     /* CASE 2:
      * The number of requested elements is greater than the number of
      * elements inside the set: simply return the whole set. 
-     *
      * 如果 count 比集合的基数要大，那么直接返回整个集合
      */
     if (count >= size) {
@@ -702,25 +698,20 @@ void srandmemberWithCountCommand(redisClient *c) {
     /* CASE 3:
      * 
      * 情形 3：
-     *
      * The number of elements inside the set is not greater than
      * SRANDMEMBER_SUB_STRATEGY_MUL times the number of requested elements.
-     *
      * count 参数乘以 SRANDMEMBER_SUB_STRATEGY_MUL 的积比集合的基数要大。
-     *
      * In this case we create a set from scratch with all the elements, and
      * subtract random elements to reach the requested number of elements.
-     *
      * 在这种情况下，程序创建一个集合的副本，
      * 并从集合中删除元素，直到集合的基数等于 count 参数指定的数量为止。
-     *
      * This is done because if the number of requsted elements is just
      * a bit less than the number of elements in the set, the natural approach
      * used into CASE 3 is highly inefficient. 
-     *
      * 使用这种做法的原因是，当 count 的数量接近于集合的基数时，
      * 从集合中随机取出 count 个参数的方法是非常低效的。
      */
+    //如果count*3 > size，说明count已经接近size，那么先copy一份集合，然后用删除元素方法直到剩下count比较高效
     if (count*SRANDMEMBER_SUB_STRATEGY_MUL > size) {
         setTypeIterator *si;
 
@@ -729,10 +720,9 @@ void srandmemberWithCountCommand(redisClient *c) {
         si = setTypeInitIterator(set);
         while((encoding = setTypeNext(si,&ele,&llele)) != -1) {
             int retval = DICT_ERR;
-
             // 为元素创建对象，并添加到字典中
             if (encoding == REDIS_ENCODING_INTSET) {
-                retval = dictAdd(d,createStringObjectFromLongLong(llele),NULL);
+                retval = dictAdd(d,createStringObjectFromLongLong(llele),NULL);//添加int>embstr>raw到字典中
             } else {
                 retval = dictAdd(d,dupStringObject(ele),NULL);
             }
@@ -752,41 +742,35 @@ void srandmemberWithCountCommand(redisClient *c) {
 
             */
         }
-        setTypeReleaseIterator(si);
+        setTypeReleaseIterator(si);//释放集合迭代器
         redisAssert(dictSize(d) == size);
 
         /* Remove random elements to reach the right count. */
-        // 随机删除元素，直到集合基数等于 count 参数的值
+        // 随机删除元素，直到词典中元素个数等于count 
         while(size > count) {
             dictEntry *de;
-
-            // 取出并删除随机元素
+            // 从词典中随机取出一个元素
             de = dictGetRandomKey(d);
+            //从词典中删除这个元素
             dictDelete(d,dictGetKey(de));
-
             size--;
         }
     }
     
     /* CASE 4: We have a big set compared to the requested number of elements.
-     *
      * 情形 4 ： count 参数要比集合基数小很多。
-     *
      * In this case we can simply get random elements from the set and add
      * to the temporary set, trying to eventually get enough unique elements
      * to reach the specified count. 
-     *
      * 在这种情况下，我们可以直接从集合中随机地取出元素，
      * 并将它添加到结果集合中，直到结果集的基数等于 count 为止。
      */
+    //否则count远小于size，用选择法来逐个添加元素比较高效
     else {
         unsigned long added = 0;
-
         while(added < count) {
-
             // 随机地从目标集合中取出元素
             encoding = setTypeRandomElement(set,&ele,&llele);
-
             // 将元素转换为对象
             if (encoding == REDIS_ENCODING_INTSET) {
                 ele = createStringObjectFromLongLong(llele);
@@ -797,11 +781,11 @@ void srandmemberWithCountCommand(redisClient *c) {
             /* Try to add the object to the dictionary. If it already exists
              * free it, otherwise increment the number of objects we have
              * in the result dictionary. */
-            // 尝试将元素添加到字典中
-            // dictAdd 只有在元素不存在于字典时，才会返回 1
-            // 如果如果结果集已经有同样的元素，那么程序会执行 else 部分
+            // 尝试将元素添加到字典中，dictAdd 只有在元素不存在于字典时，才会返回 1
+            // 如果结果集已经有同样的元素，那么程序会执行 else 部分
             // 只有元素不存在于结果集时，添加才会成功
             if (dictAdd(d,ele,NULL) == DICT_OK)
+                //元素不存在于词典中，则添加成功added++
                 added++;
             else
                 decrRefCount(ele);
@@ -810,21 +794,21 @@ void srandmemberWithCountCommand(redisClient *c) {
 
     /* CASE 3 & 4: send the result to the user. */
     {
-        // 情形 3 和 4 ：将结果集回复给客户端
+        // 情形 3 和 4 ：结果都在临时字典中，遍历字典并添加到回复中
         dictIterator *di;
         dictEntry *de;
 
         addReplyMultiBulkLen(c,count);
-        // 遍历结果集元素
+        // 遍历临时字典
         di = dictGetIterator(d);
         while((de = dictNext(di)) != NULL)
             // 回复
             addReplyBulk(c,dictGetKey(de));
-        dictReleaseIterator(di);
-        dictRelease(d);
+        dictReleaseIterator(di);//释放迭代器
+        dictRelease(d);//释放临时字典
     }
 }
-
+//实现srandmember命令
 void srandmemberCommand(redisClient *c) {
     robj *set, *ele;
     int64_t llele;
@@ -841,24 +825,23 @@ void srandmemberCommand(redisClient *c) {
         return;
     }
 
-    // 随机取出单个元素就可以了
-
-    // 取出集合对象
+    // 否则随机取出单个元素就可以了
+    // 取出集合对象，集合不存在或者类型不是集合直接返回
     if ((set = lookupKeyReadOrReply(c,c->argv[1],shared.nullbulk)) == NULL ||
         checkType(c,set,REDIS_SET)) return;
 
     // 随机取出一个元素
     encoding = setTypeRandomElement(set,&ele,&llele);
-    // 回复
+    // 添加回复到client中
     if (encoding == REDIS_ENCODING_INTSET) {
-        addReplyBulkLongLong(c,llele);
+        addReplyBulkLongLong(c,llele);//添加llele到回复中
     } else {
-        addReplyBulk(c,ele);
+        addReplyBulk(c,ele);//添加ele到回复中
     }
 }
 
 /*
- * 计算集合 s1 的基数减去集合 s2 的基数之差
+ * 计算集合s1的元素个数与集合s2的元素个数之差
  */
 int qsortCompareSetsByCardinality(const void *s1, const void *s2) {
     return setTypeSize(*(robj**)s1)-setTypeSize(*(robj**)s2);
@@ -866,18 +849,16 @@ int qsortCompareSetsByCardinality(const void *s1, const void *s2) {
 
 /* This is used by SDIFF and in this case we can receive NULL that should
  * be handled as empty sets. 
- *
- * 计算集合 s2 的基数减去集合 s1 的基数之差
+ * 计算集合 s2 的基数减去集合 s1 的基数之差（s2和s1可以为NULL）
  */
 int qsortCompareSetsByRevCardinality(const void *s1, const void *s2) {
     robj *o1 = *(robj**)s1, *o2 = *(robj**)s2;
-
     return  (o2 ? setTypeSize(o2) : 0) - (o1 ? setTypeSize(o1) : 0);
 }
 
+//取出setkeys[0...setnum]这些集合对象的交集，如果dstkey!=NULL那么放入dstkey中，如果为NULL那么交集放入c的回复中
 void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, robj *dstkey) {
-
-    // 集合数组
+    // 申请集合数组内存，用于指向setkeys[0...setnum]对应的各个集合对象
     robj **sets = zmalloc(sizeof(robj*)*setnum);
 
     setTypeIterator *si;
@@ -887,20 +868,18 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
     unsigned long j, cardinality = 0;
     int encoding;
 
+    //遍历每个输入集合
     for (j = 0; j < setnum; j++) {
+      
+        // 取出setkeys[i]对应的集合对象。
+        robj *setobj = dstkey ?lookupKeyWrite(c->db,setkeys[j]) : lookupKeyRead(c->db,setkeys[j]);
 
-        // 取出对象
-        // 第一次执行时，取出的是 dest 集合
-        // 之后执行时，取出的都是 source 集合
-        robj *setobj = dstkey ?
-            lookupKeyWrite(c->db,setkeys[j]) :
-            lookupKeyRead(c->db,setkeys[j]);
-
-        // 对象不存在，放弃执行，进行清理
+        // setkeys[j]集合对象不存在，放弃执行，进行清理，然后直接返回
         if (!setobj) {
-            zfree(sets);
+            zfree(sets); //释放集合数组内存
+            //如果dskkey存在，那么从db中删除这个集合（因为setkey[i]集合对象是空，执行完命令后dstkey集合也会为空，所以应该删除）
             if (dstkey) {
-                if (dbDelete(c->db,dstkey)) {
+                if (dbDelete(c->db,dstkey)) { //删除该集合对象
                     signalModifiedKey(c->db,dstkey);
                     server.dirty++;
                 }
@@ -911,7 +890,7 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
             return;
         }
         
-        // 检查对象的类型
+        // 检查对象的类型，如果对象类型不是集合，释放集合数组内存，然后返回
         if (checkType(c,setobj,REDIS_SET)) {
             zfree(sets);
             return;
@@ -923,7 +902,8 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
 
     /* Sort sets from the smallest to largest, this will improve our
      * algorithm's performance */
-    // 按基数对集合进行排序，这样提升算法的效率
+    // 按基数对集合进行排序，这样提升算法的效率。集合中元素个数小的排序在前面
+    //排序完成后，sets[0...setnum]各个集合对象按照元素个数从小到大排列
     qsort(sets,setnum,sizeof(robj*),qsortCompareSetsByCardinality);
 
     /* The first thing we should output is the total number of elements...
@@ -939,27 +919,28 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
     } else {
         /* If we have a target key where to store the resulting set
          * create this key with an empty set inside */
+        //如果dstkey对象存在，那么为它创建一个集合对象（默认是intset编码的集合对象）
         dstset = createIntsetObject();
     }
 
     /* Iterate all the elements of the first (smallest) set, and test
      * the element against all the other sets, if at least one set does
      * not include the element it is discarded */
-    // 遍历基数最小的第一个集合
-    // 并将它的元素和所有其他集合进行对比
-    // 如果有至少一个集合不包含这个元素，那么这个元素不属于交集
-    si = setTypeInitIterator(sets[0]);
+    // 遍历基数最小的第一个集合，并将它的元素和所有其他集合进行对比
+    // 如果有一个集合不包含这个元素，那么这个元素不属于交集
+    si = setTypeInitIterator(sets[0]);//创建元素最少的集合的迭代器
+    //遍历这个集合
     while((encoding = setTypeNext(si,&eleobj,&intobj)) != -1) {
-        // 遍历其他集合，检查元素是否在这些集合中存在
+        // 遍历剩下的其它集合，检查迭代器指向的元素是否在这些集合中
         for (j = 1; j < setnum; j++) {
-
-            // 跳过第一个集合，因为它是结果集的起始值
+            // 跳过第一个集合，因为它是结果集的起始值（这里必须加上，虽然j肯定不等于0，但可能一个集合对象输入2次，
+            //这样sets[0...setnum]）中前几个集合可能指向相同集合对象
             if (sets[j] == sets[0]) continue;
 
-            // 元素的编码为 INTSET 
-            // 在其他集合中查找这个对象是否存在
+            // 迭代器指向元素的编码为 INTSET，在集合set[j]中检查迭代器指向的元素是否存在
             if (encoding == REDIS_ENCODING_INTSET) {
                 /* intset with intset is simple... and fast */
+                //如果集合set[j]是intset编码，并且迭代器指向元素intobj不存在这个集合中，那么不用检查剩下的集合了，跳出循环
                 if (sets[j]->encoding == REDIS_ENCODING_INTSET &&
                     !intsetFind((intset*)sets[j]->ptr,intobj))
                 {
@@ -968,7 +949,9 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
                  * have to use the generic function, creating an object
                  * for this */
                 } else if (sets[j]->encoding == REDIS_ENCODING_HT) {
+                    //如果sets[j]是dict编码，先为intobj创建int>embstr>raw编码的字符串对象
                     eleobj = createStringObjectFromLongLong(intobj);
+                    //如果迭代器指向元素不存在集合sets[j]中，跳出循环
                     if (!setTypeIsMember(sets[j],eleobj)) {
                         decrRefCount(eleobj);
                         break;
@@ -976,12 +959,13 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
                     decrRefCount(eleobj);
                 }
 
-            // 元素的编码为 字典
-            // 在其他集合中查找这个对象是否存在
+            //如果迭代器指向元素是dict编码，那么用eleobj代表迭代器元素。在其他集合中查找这个对象是否存在
             } else if (encoding == REDIS_ENCODING_HT) {
                 /* Optimization... if the source object is integer
                  * encoded AND the target set is an intset, we can get
                  * a much faster path. */
+                //如果eleobj字符串对象是int编码，并且集合sets[j]是intset编码，那么直接用sets[j]检查整数eleobj->ptr(可以转换为long)
+                //是否存在，如果不存在直接跳出循环
                 if (eleobj->encoding == REDIS_ENCODING_INT &&
                     sets[j]->encoding == REDIS_ENCODING_INTSET &&
                     !intsetFind((intset*)sets[j]->ptr,(long)eleobj->ptr))
@@ -989,6 +973,7 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
                     break;
                 /* else... object to object check is easy as we use the
                  * type agnostic API here. */
+                 //其它情况，就检查集合sets[j]看字符串对象eleobj是否存在了
                 } else if (!setTypeIsMember(sets[j],eleobj)) {
                     break;
                 }
@@ -996,45 +981,47 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
         }
 
         /* Only take action when all sets contain the member */
-        // 如果所有集合都带有目标元素的话，那么执行以下代码
+        // 如果j==setnum，说明所有集合都存在迭代器指向的目标元素。if对应的else情况就是迭代器指向元素不存在于某个集合，那么不添加这个元素到结果中
         if (j == setnum) {
 
-            // SINTER 命令，直接返回结果集元素
+            // 如果SINTER 命令，那么将迭代器指向元素添加到回复中
             if (!dstkey) {
                 if (encoding == REDIS_ENCODING_HT)
-                    addReplyBulk(c,eleobj);
+                    addReplyBulk(c,eleobj); //将eleobj添加到回复中
                 else
-                    addReplyBulkLongLong(c,intobj);
+                    addReplyBulkLongLong(c,intobj); //将intobj添加到回复中
                 cardinality++;
 
             // SINTERSTORE 命令，将结果添加到结果集中
             } else {
                 if (encoding == REDIS_ENCODING_INTSET) {
+                    //为intobj创建int>embstr>raw的字符串编码，然后添加到dstset中
                     eleobj = createStringObjectFromLongLong(intobj);
                     setTypeAdd(dstset,eleobj);
                     decrRefCount(eleobj);
                 } else {
-                    setTypeAdd(dstset,eleobj);
+                    setTypeAdd(dstset,eleobj);//将eleobj添加到dstset中
                 }
             }
         }
     }
-    setTypeReleaseIterator(si);
+    setTypeReleaseIterator(si);//释放迭代器对象
 
-    // SINTERSTORE 命令，将结果集关联到数据库
+    // SINTERSTORE 命令，将dstkey-dstset关联到db中
     if (dstkey) {
         /* Store the resulting set into the target, if the intersection
          * is not an empty set. */
-        // 删除现在可能有的 dstkey
+        // 删除现在可能有的 dstkey对应的集合对象
         int deleted = dbDelete(c->db,dstkey);
 
         // 如果结果集非空，那么将它关联到数据库中
         if (setTypeSize(dstset) > 0) {
-            dbAdd(c->db,dstkey,dstset);
-            addReplyLongLong(c,setTypeSize(dstset));
+            dbAdd(c->db,dstkey,dstset);//添加dstkey-dstset到db中
+            addReplyLongLong(c,setTypeSize(dstset));//返回结果集的元素个数
             notifyKeyspaceEvent(REDIS_NOTIFY_SET,"sinterstore",
                 dstkey,c->db->id);
         } else {
+            //结果集为空
             decrRefCount(dstset);
             addReply(c,shared.czero);
             if (deleted)
@@ -1043,21 +1030,19 @@ void sinterGenericCommand(redisClient *c, robj **setkeys, unsigned long setnum, 
         }
 
         signalModifiedKey(c->db,dstkey);
-
         server.dirty++;
-
     // SINTER 命令，回复结果集的基数
     } else {
         setDeferredMultiBulkLength(c,replylen,cardinality);
     }
 
-    zfree(sets);
+    zfree(sets);//释放集合数组
 }
-
+//sinter k1 k2...，将k1 k2 ...的交集返回给client
 void sinterCommand(redisClient *c) {
     sinterGenericCommand(c,c->argv+1,c->argc-1,NULL);
 }
-
+//sinterstore dest k1 k2 ...，将k1 k2 ...的交集放入dest中。c->argv[1]是dest-key
 void sinterstoreCommand(redisClient *c) {
     sinterGenericCommand(c,c->argv+2,c->argc-2,c->argv[1]);
 }
@@ -1068,10 +1053,9 @@ void sinterstoreCommand(redisClient *c) {
 #define REDIS_OP_UNION 0
 #define REDIS_OP_DIFF 1
 #define REDIS_OP_INTER 2
-
+//根据op看是并集还是差集，并将结果集返回给client（如果dstkey是NULL）,或将dstkey-结果集写入db中（如果dstkey不是NULL）
 void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *dstkey, int op) {
-
-    // 集合数组
+    // 集合数组，指向setkeys[0...setnum]中各个集合对象
     robj **sets = zmalloc(sizeof(robj*)*setnum);
 
     setTypeIterator *si;
@@ -1081,43 +1065,36 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
 
     // 取出所有集合对象，并添加到集合数组中
     for (j = 0; j < setnum; j++) {
+        //取出setkeys[i]对应的集合对象
         robj *setobj = dstkey ?
             lookupKeyWrite(c->db,setkeys[j]) :
             lookupKeyRead(c->db,setkeys[j]);
 
-        // 不存在的集合当作 NULL 来处理
+        // 不存在的集合对象当作 NULL 来处理
         if (!setobj) {
             sets[j] = NULL;
             continue;
         }
 
-        // 有对象不是集合，停止执行，进行清理
+        // 有对象但类型不是集合对象，停止执行，进行清理
         if (checkType(c,setobj,REDIS_SET)) {
-            zfree(sets);
+            zfree(sets);//是否集合数组并直接返回
             return;
         }
 
-        // 记录对象
+        // 记录集合对象到集合数组中
         sets[j] = setobj;
     }
 
     /* Select what DIFF algorithm to use.
-     *
      * 选择使用那个算法来执行计算
-     *
      * Algorithm 1 is O(N*M) where N is the size of the element first set
      * and M the total number of sets.
-     *
-     * 算法 1 的复杂度为 O(N*M) ，其中 N 为第一个集合的基数，
-     * 而 M 则为其他集合的数量。
-     *
+     * 算法 1 的复杂度为 O(N*M) ，其中 N 为第一个集合的基数， 而 M 则为其他集合的数量。
      * Algorithm 2 is O(N) where N is the total number of elements in all
      * the sets.
-     *
      * 算法 2 的复杂度为 O(N) ，其中 N 为所有集合中的元素数量总数。
-     *
      * We compute what is the best bet with the current input here. 
-     *
      * 程序通过考察输入来决定使用那个算法
      */
     if (op == REDIS_OP_DIFF && sets[0]) {
@@ -1127,9 +1104,9 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
         for (j = 0; j < setnum; j++) {
             if (sets[j] == NULL) continue;
 
-            // 计算 setnum 乘以 sets[0] 的基数之积
+            // 计算 setnum 乘以 sets[0]元素个数之积
             algo_one_work += setTypeSize(sets[0]);
-            // 计算所有集合的基数之和
+            // 计算所有集合的元素个数之和
             algo_two_work += setTypeSize(sets[j]);
         }
 
@@ -1153,96 +1130,82 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
     /* We need a temp set object to store our union. If the dstkey
      * is not NULL (that is, we are inside an SUNIONSTORE operation) then
      * this set object will be the resulting object to set into the target key
-     *
-     * 使用一个临时集合来保存结果集，如果程序执行的是 SUNIONSTORE 命令，
-     * 那么这个结果将会成为将来的集合值对象。
+     * 使用一个临时集合来保存结果集，如果程序执行的是 SUNIONSTORE 命令，那么这个结果将会成为将来的集合值对象。
      */
     dstset = createIntsetObject();
 
-    // 执行的是并集计算
+    // 执行的是并集计算。遍历所有集合，将集合元素添加到结果集中就可以了
     if (op == REDIS_OP_UNION) {
         /* Union is trivial, just add every element of every set to the
          * temporary set. */
         // 遍历所有集合，将元素添加到结果集里就可以了
         for (j = 0; j < setnum; j++) {
+            //跳过空集合
             if (!sets[j]) continue; /* non existing keys are like empty sets */
 
-            si = setTypeInitIterator(sets[j]);
-            while((ele = setTypeNextObject(si)) != NULL) {
-                // setTypeAdd 只在集合不存在时，才会将元素添加到集合，并返回 1 
+            si = setTypeInitIterator(sets[j]);//集合对象迭代器
+            while((ele = setTypeNextObject(si)) != NULL) {//遍历集合对象
+                // 添加元素到结果集中。setTypeAdd 只在集合不存在时，才会将元素添加到集合，并返回 1 
                 if (setTypeAdd(dstset,ele)) cardinality++;
                 decrRefCount(ele);
             }
-            setTypeReleaseIterator(si);
+            setTypeReleaseIterator(si);//释放集合迭代器
         }
 
     // 执行的是差集计算，并且使用算法 1
     } else if (op == REDIS_OP_DIFF && sets[0] && diff_algo == 1) {
         /* DIFF Algorithm 1:
-         *
          * 差集算法 1 ：
-         *
          * We perform the diff by iterating all the elements of the first set,
          * and only adding it to the target set if the element does not exist
          * into all the other sets.
-         *
-         * 程序遍历 sets[0] 集合中的所有元素，
-         * 并将这个元素和其他集合的所有元素进行对比，
-         * 只有这个元素不存在于其他所有集合时，
-         * 才将这个元素添加到结果集。
-         *
+         * 程序遍历 sets[0] 集合中的所有元素，并将这个元素和其他集合的所有元素进行对比，
+         * 只有这个元素不存在于其他所有集合时，才将这个元素添加到结果集。
          * This way we perform at max N*M operations, where N is the size of
          * the first set, and M the number of sets. 
-         *
          * 这个算法执行最多 N*M 步， N 是第一个集合的基数，
          * 而 M 是其他集合的数量。
          */
-        si = setTypeInitIterator(sets[0]);
+        si = setTypeInitIterator(sets[0]);//初始化第一个集合对象的迭代器，遍历第一个集合对象
         while((ele = setTypeNextObject(si)) != NULL) {
 
             // 检查元素在其他集合是否存在
             for (j = 1; j < setnum; j++) {
-                if (!sets[j]) continue; /* no key is an empty set. */
-                if (sets[j] == sets[0]) break; /* same set! */
-                if (setTypeIsMember(sets[j],ele)) break;
+                if (!sets[j]) continue; /* no key is an empty set. */ //继续看下个集合对象
+                if (sets[j] == sets[0]) break; /* same set! *///会丢弃这个元素
+                if (setTypeIsMember(sets[j],ele)) break; //如果迭代器指向的元素存在这个集合中，丢弃这个元素
             }
 
             // 只有元素在所有其他集合中都不存在时，才将它添加到结果集中
             if (j == setnum) {
                 /* There is no other set with this element. Add it. */
-                setTypeAdd(dstset,ele);
+                setTypeAdd(dstset,ele);//添加到结果集中
                 cardinality++;
             }
-
             decrRefCount(ele);
         }
-        setTypeReleaseIterator(si);
+        setTypeReleaseIterator(si);//释放迭代器
 
     // 执行的是差集计算，并且使用算法 2
     } else if (op == REDIS_OP_DIFF && sets[0] && diff_algo == 2) {
         /* DIFF Algorithm 2:
-         *
          * 差集算法 2 ：
-         *
          * Add all the elements of the first set to the auxiliary set.
          * Then remove all the elements of all the next sets from it.
-         *
          * 将 sets[0] 的所有元素都添加到结果集中，
          * 然后遍历其他所有集合，将相同的元素从结果集中删除。
-         *
          * This is O(N) where N is the sum of all the elements in every set. 
-         *
          * 算法复杂度为 O(N) ，N 为所有集合的基数之和。
          */
         for (j = 0; j < setnum; j++) {
             if (!sets[j]) continue; /* non existing keys are like empty sets */
-
+            //遍历这个集合
             si = setTypeInitIterator(sets[j]);
             while((ele = setTypeNextObject(si)) != NULL) {
-                // sets[0] 时，将所有元素添加到集合
+                // sets[0]集合对象，将所有元素添加到结果集中
                 if (j == 0) {
                     if (setTypeAdd(dstset,ele)) cardinality++;
-                // 不是 sets[0] 时，将所有集合从结果集中移除
+                // 不是 sets[0] 时，将当前迭代器元素重结果集中删除
                 } else {
                     if (setTypeRemove(dstset,ele)) cardinality--;
                 }
@@ -1262,26 +1225,25 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
     if (!dstkey) {
         addReplyMultiBulkLen(c,cardinality);
 
-        // 遍历并回复结果集中的元素
+        // 遍历结果集并添加到回复中
         si = setTypeInitIterator(dstset);
         while((ele = setTypeNextObject(si)) != NULL) {
             addReplyBulk(c,ele);
             decrRefCount(ele);
         }
         setTypeReleaseIterator(si);
-
         decrRefCount(dstset);
 
     // 执行的是 SDIFFSTORE 或者 SUNIONSTORE
     } else {
         /* If we have a target key where to store the resulting set
          * create this key with the result set inside */
-        // 现删除现在可能有的 dstkey
+        // 现删除现在可能有的 dstkey对应的集合对象
         int deleted = dbDelete(c->db,dstkey);
 
         // 如果结果集不为空，将它关联到数据库中
         if (setTypeSize(dstset) > 0) {
-            dbAdd(c->db,dstkey,dstset);
+            dbAdd(c->db,dstkey,dstset);//将dstkey-dstset关联到db中
             // 返回结果集的基数
             addReplyLongLong(c,setTypeSize(dstset));
             notifyKeyspaceEvent(REDIS_NOTIFY_SET,
@@ -1299,26 +1261,26 @@ void sunionDiffGenericCommand(redisClient *c, robj **setkeys, int setnum, robj *
         }
 
         signalModifiedKey(c->db,dstkey);
-
         server.dirty++;
     }
 
-    zfree(sets);
+    zfree(sets);//释放结果集数组
 }
-
+//多个集合的并集返回给client
 void sunionCommand(redisClient *c) {
     sunionDiffGenericCommand(c,c->argv+1,c->argc-1,NULL,REDIS_OP_UNION);
 }
-
+//多个集合的并集放入c->argv[1]对象中
 void sunionstoreCommand(redisClient *c) {
     sunionDiffGenericCommand(c,c->argv+2,c->argc-2,c->argv[1],REDIS_OP_UNION);
 }
-
+//将第一个集合和其它所有集合的差集返回给客户端（某个元素只存在于第一个集合，不存在于任何其它集合）
+//Returns the members of the set resulting from the difference between the first set and all the successive sets
 void sdiffCommand(redisClient *c) {
     sunionDiffGenericCommand(c,c->argv+1,c->argc-1,NULL,REDIS_OP_DIFF);
 }
-
-void sdiffstoreCommand(redisClient *c) {
+//将第一个集合和其它所有集合的差集放入c->argv[1]中（某个元素只存在于第一个集合，不存在于任何其它集合）
+//Returns the members of the set resulting from the difference between the first set and all the successive setsvoid sdiffstoreCommand(redisClient *c) {
     sunionDiffGenericCommand(c,c->argv+2,c->argc-2,c->argv[1],REDIS_OP_DIFF);
 }
 
