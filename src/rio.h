@@ -66,7 +66,7 @@ struct _rio {
     size_t processed_bytes;
 
     /* maximum single read or write chunk size */
-    //一次最多可读或可写字节数
+    //一次最多可读或可写字节数（为0，就是不限制读写的字节数）
     size_t max_processing_chunk;
 
     /* Backend-specific vars. */
