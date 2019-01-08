@@ -44,7 +44,7 @@ struct _rio {
     /* Backend functions.
      * Since this functions do not tolerate short writes or reads the return
      * value is simplified to: zero on error, non zero on complete success. */
-    // API
+    // 返回0表示错误，非0表示成功
     size_t (*read)(struct _rio *, void *buf, size_t len);
     size_t (*write)(struct _rio *, const void *buf, size_t len);
     off_t (*tell)(struct _rio *);
@@ -62,9 +62,11 @@ struct _rio {
     uint64_t cksum;
 
     /* number of bytes read or written */
+    //当前已读或已写数据量
     size_t processed_bytes;
 
     /* maximum single read or write chunk size */
+    //一次最多可读或可写字节数
     size_t max_processing_chunk;
 
     /* Backend-specific vars. */
@@ -75,16 +77,15 @@ struct _rio {
             sds ptr;
             // 偏移量
             off_t pos;
-        } buffer;
+        } buffer;//指向一块buffer， sds用于存储，pos指示偏移量
 
         struct {
-            // 被打开文件的指针
-            FILE *fp;
+            FILE *fp;//被打开文件的句柄
             // 最近一次 fsync() 以来，写入的字节量
             off_t buffered; /* Bytes written since last fsync. */
             // 写入多少字节之后，才会自动执行一次 fsync()
             off_t autosync; /* fsync after 'autosync' bytes written. */
-        } file;
+        } file; //指向一个文件
     } io;
 };
 
@@ -93,45 +94,41 @@ typedef struct _rio rio;
 /* The following functions are our interface with the stream. They'll call the
  * actual implementation of read / write / tell, and will update the checksum
  * if needed. */
-
 /*
- * 将 buf 中的 len 字节写入到 r 中。
- *
- * 写入成功返回实际写入的字节数，写入失败返回 -1 。
+ * 将 buf 中的 len 字节写入到 r 中。 写入成功返回1，写入失败返回0
  */
 static inline size_t rioWrite(rio *r, const void *buf, size_t len) {
     while (len) {
+        //一次最多可写的字节数
         size_t bytes_to_write = (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
-        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_write);
-        if (r->write(r,buf,bytes_to_write) == 0)
+        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_write);//更新checksum
+        if (r->write(r,buf,bytes_to_write) == 0)//如果写入失败，返回0
             return 0;
-        buf = (char*)buf + bytes_to_write;
-        len -= bytes_to_write;
-        r->processed_bytes += bytes_to_write;
+        buf = (char*)buf + bytes_to_write;//已写入bytes_to_write字节，更新buf指针
+        len -= bytes_to_write;//减少len
+        r->processed_bytes += bytes_to_write;//更新rio的写入字节数
     }
     return 1;
 }
 
 /*
- * 从 r 中读取 len 字节，并将内容保存到 buf 中。
- *
- * 读取成功返回 1 ，失败返回 0 。
+ * 从 r 中读取 len 字节，并将内容保存到 buf 中。读取成功返回 1 ，失败返回 0 。
  */
 static inline size_t rioRead(rio *r, void *buf, size_t len) {
     while (len) {
+        //一次最多可读的字节数
         size_t bytes_to_read = (r->max_processing_chunk && r->max_processing_chunk < len) ? r->max_processing_chunk : len;
-        if (r->read(r,buf,bytes_to_read) == 0)
+        if (r->read(r,buf,bytes_to_read) == 0)//如果读取失败，返回0
             return 0;
-        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_read);
-        buf = (char*)buf + bytes_to_read;
-        len -= bytes_to_read;
-        r->processed_bytes += bytes_to_read;
+        if (r->update_cksum) r->update_cksum(r,buf,bytes_to_read);//更新checksum
+        buf = (char*)buf + bytes_to_read;//已读取bytes_to_read字节，更新buf指针
+        len -= bytes_to_read;//len是仍然需要读取的字节数
+        r->processed_bytes += bytes_to_read;//更新rio的读取字节数
     }
     return 1;
 }
 
-/*
- * 返回 r 的当前偏移量。
+/*返回 r 的当前偏移量。
  */
 static inline off_t rioTell(rio *r) {
     return r->tell(r);
