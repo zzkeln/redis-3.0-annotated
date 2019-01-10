@@ -59,7 +59,11 @@
  * 11|000000 this means: specially encoded object will follow. The six bits
  *           number specify the kind of object that follows.
  *           See the REDIS_RDB_ENC_* defines.
- *           后跟一个特殊编码的对象。字节中的 6 位指定对象的类型。
+ *           后跟一个特殊编码的对象。字节中的 6 位指定对象的类型:
+             如果剩余6位是0：表示后面跟一个int8
+                         1：表示后面跟一个int16 
+                         2：表示后面跟一个int32
+                         4：表示是压缩字符串，跟一个压缩长度+未压缩长度+压缩字节内容。
  *           查看 REDIS_RDB_ENC_* 定义获得更多消息
  *
  * Lenghts up to 63 are stored using a single byte, most DB keys, and may
