@@ -66,10 +66,10 @@
  * values, will fit inside. 
  * 一个字节（的其中 6 个字节）可以保存的最大长度是 63 （包括在内），对于大多数键和值来说，都已经足够了。
  */
-#define REDIS_RDB_6BITLEN 0
-#define REDIS_RDB_14BITLEN 1
-#define REDIS_RDB_32BITLEN 2
-#define REDIS_RDB_ENCVAL 3
+#define REDIS_RDB_6BITLEN 0    // 00xxxxxx
+#define REDIS_RDB_14BITLEN 1   // 01xxxxxx
+#define REDIS_RDB_32BITLEN 2   // 10xxxxxx
+#define REDIS_RDB_ENCVAL 3     // 11xxxxxx
 // 表示读取/写入错误
 #define REDIS_RDB_LENERR UINT_MAX
 
