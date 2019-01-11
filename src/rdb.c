@@ -926,7 +926,6 @@ int rdbSave(char *filename) {
     // 写入 RDB 版本号
     snprintf(magic,sizeof(magic),"REDIS%04d",REDIS_RDB_VERSION);
     if (rdbWriteRaw(&rdb,magic,9) == -1) goto werr;
-
     // 遍历所有数据库
     for (j = 0; j < server.dbnum; j++) {
 
