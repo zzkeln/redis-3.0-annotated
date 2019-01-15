@@ -330,7 +330,9 @@ void flushAppendOnlyFile(int force) {
     // 策略为每秒 FSYNC 
     if (server.aof_fsync == AOF_FSYNC_EVERYSEC)
         // 是否有 SYNC 正在后台进行？
-        sync_in_progress = bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC) != 0;//这个函数返回等待sync的任务个数
+        //这个函数返回等待sync的任务个数，注意bio的任务处理过程中，先从任务队列中取出任务然后开始执行，例如从fsync任务队列中
+        //取出任务然后开始fsync，直到执行完后才会从任务队列中删除，所以这里不为0 大概率是后台线程正在fsync但还未完成
+        sync_in_progress = bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC) != 0;
 
     // 每秒 fsync ，并且强制写入为假
     if (server.aof_fsync == AOF_FSYNC_EVERYSEC && !force) {
@@ -1260,6 +1262,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
  * Redis 会尽可能地使用接受可变参数数量的命令，比如 RPUSH 、SADD 和 ZADD 等。
  * 不过单个命令每次处理的元素数量不能超过 REDIS_AOF_REWRITE_ITEMS_PER_CMD 。
  */
+//将数据库当前状态重写到filename中。注意filename是temp-rewriteaof-bg-进程号，仍然不是config中的aof文件名
+//需要父进程将重写缓冲区中内容写入到temp-rewriteaof-bg-进程号后，再将这个文件改名为config中的aof文件名
 int rewriteAppendOnlyFile(char *filename) {
     dictIterator *di = NULL;
     dictEntry *de;
