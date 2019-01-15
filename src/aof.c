@@ -1731,7 +1731,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         redisLog(REDIS_WARNING,
             "Background AOF rewrite terminated by signal %d", bysignal);
     }
-
+    //注意，这里没有return，所以肯定会执行cleanup，来把aof重写缓冲区给清空。
 cleanup:
 
     // 清空 AOF 缓冲区
