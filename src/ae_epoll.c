@@ -32,10 +32,9 @@
 #include <sys/epoll.h>
 
 /*
- * 事件状态
+ * 事件状态，封装了epoll实例和要监控的epoll_event
  */
 typedef struct aeApiState {
-
     // epoll_event 实例描述符
     int epfd;
 
