@@ -47,12 +47,12 @@ typedef struct aeApiState {
  * 创建一个新的 epoll 实例，并将它赋值给 eventLoop
  */
 static int aeApiCreate(aeEventLoop *eventLoop) {
-
+    //为state分配内存
     aeApiState *state = zmalloc(sizeof(aeApiState));
 
     if (!state) return -1;
 
-    // 初始化事件槽空间
+    // 初始化事件槽空间，分配内存，为events分配setsize大小的内存
     state->events = zmalloc(sizeof(struct epoll_event)*eventLoop->setsize);
     if (!state->events) {
         zfree(state);
@@ -67,13 +67,13 @@ static int aeApiCreate(aeEventLoop *eventLoop) {
         return -1;
     }
 
-    // 赋值给 eventLoop
+    // 赋值state给eventLoop的apidata
     eventLoop->apidata = state;
     return 0;
 }
 
 /*
- * 调整事件槽大小
+ * 调整事件槽大小，用realloc重新为events分配内存
  */
 static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
     aeApiState *state = eventLoop->apidata;
@@ -88,13 +88,13 @@ static int aeApiResize(aeEventLoop *eventLoop, int setsize) {
 static void aeApiFree(aeEventLoop *eventLoop) {
     aeApiState *state = eventLoop->apidata;
 
-    close(state->epfd);
-    zfree(state->events);
-    zfree(state);
+    close(state->epfd);//关闭epoll的实例
+    zfree(state->events);//释放监控的fd列表
+    zfree(state);//释放整个state内存
 }
 
 /*
- * 关联给定事件到 fd
+ * 关联给定事件到 fd，添加或修改事件监控
  */
 static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     aeApiState *state = eventLoop->apidata;
@@ -102,9 +102,7 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
 
     /* If the fd was already monitored for some event, we need a MOD
      * operation. Otherwise we need an ADD operation. 
-     *
      * 如果 fd 没有关联任何事件，那么这是一个 ADD 操作。
-     *
      * 如果已经关联了某个/某些事件，那么这是一个 MOD 操作。
      */
     int op = eventLoop->events[fd].mask == AE_NONE ?
@@ -112,11 +110,11 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
 
     // 注册事件到 epoll
     ee.events = 0;
-    mask |= eventLoop->events[fd].mask; /* Merge old events */
-    if (mask & AE_READABLE) ee.events |= EPOLLIN;
-    if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;
+    mask |= eventLoop->events[fd].mask; /* Merge old events */ //合并原有的mask
+    if (mask & AE_READABLE) ee.events |= EPOLLIN;  //监控可读事件
+    if (mask & AE_WRITABLE) ee.events |= EPOLLOUT; //监控可写事件
     ee.data.u64 = 0; /* avoid valgrind warning */
-    ee.data.fd = fd;
+    ee.data.fd = fd;//设定要监控的fd
 
     if (epoll_ctl(state->epfd,op,fd,&ee) == -1) return -1;
 
@@ -124,56 +122,58 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
 }
 
 /*
- * 从 fd 中删除给定事件
+ * 从 fd 中删除给定事件：删除或修改事件监控
  */
 static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
     aeApiState *state = eventLoop->apidata;
     struct epoll_event ee;
 
-    int mask = eventLoop->events[fd].mask & (~delmask);
+    int mask = eventLoop->events[fd].mask & (~delmask);//看看还剩下啥监控的事件
 
     ee.events = 0;
-    if (mask & AE_READABLE) ee.events |= EPOLLIN;
-    if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;
+    if (mask & AE_READABLE) ee.events |= EPOLLIN; //还剩下可读事件监控
+    if (mask & AE_WRITABLE) ee.events |= EPOLLOUT;//还剩下可写事件监控
     ee.data.u64 = 0; /* avoid valgrind warning */
     ee.data.fd = fd;
     if (mask != AE_NONE) {
+        //修改事件监控
         epoll_ctl(state->epfd,EPOLL_CTL_MOD,fd,&ee);
     } else {
         /* Note, Kernel < 2.6.9 requires a non null event pointer even for
          * EPOLL_CTL_DEL. */
+        //如果mask==NONE，说明要删除监控
         epoll_ctl(state->epfd,EPOLL_CTL_DEL,fd,&ee);
     }
 }
 
 /*
- * 获取可执行事件
+ * 获取可执行的事件
  */
 static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     aeApiState *state = eventLoop->apidata;
     int retval, numevents = 0;
 
-    // 等待时间
+    // 等待事件
     retval = epoll_wait(state->epfd,state->events,eventLoop->setsize,
             tvp ? (tvp->tv_sec*1000 + tvp->tv_usec/1000) : -1);
 
-    // 有至少一个事件就绪？
+    // 有至少一个事件就绪
     if (retval > 0) {
         int j;
 
         // 为已就绪事件设置相应的模式
         // 并加入到 eventLoop 的 fired 数组中
-        numevents = retval;
+        numevents = retval; //设置就绪事件个数
         for (j = 0; j < numevents; j++) {
             int mask = 0;
             struct epoll_event *e = state->events+j;
 
-            if (e->events & EPOLLIN) mask |= AE_READABLE;
-            if (e->events & EPOLLOUT) mask |= AE_WRITABLE;
-            if (e->events & EPOLLERR) mask |= AE_WRITABLE;
-            if (e->events & EPOLLHUP) mask |= AE_WRITABLE;
+            if (e->events & EPOLLIN) mask |= AE_READABLE;  //事件可读
+            if (e->events & EPOLLOUT) mask |= AE_WRITABLE; //事件可写
+            if (e->events & EPOLLERR) mask |= AE_WRITABLE; //事件可写
+            if (e->events & EPOLLHUP) mask |= AE_WRITABLE; //事件可写
 
-            eventLoop->fired[j].fd = e->data.fd;
+            eventLoop->fired[j].fd = e->data.fd; //添加到fired中
             eventLoop->fired[j].mask = mask;
         }
     }
