@@ -42,7 +42,7 @@
 #define AE_ERR -1
 
 /*
- * 文件事件状态
+ * 文件事件状态，只有三种：未监控任何事件，监控可读事件，监控可写时间
  */
 // 未设置
 #define AE_NONE 0
@@ -58,7 +58,7 @@
 #define AE_FILE_EVENTS 1
 // 时间事件
 #define AE_TIME_EVENTS 2
-// 所有事件
+// 所有事件：包含文件事件和时间事件
 #define AE_ALL_EVENTS (AE_FILE_EVENTS|AE_TIME_EVENTS)
 // 不阻塞，也不进行等待
 #define AE_DONT_WAIT 4
@@ -72,7 +72,7 @@
 #define AE_NOTUSED(V) ((void) V)
 
 /*
- * 事件处理器状态
+ * 事件处理器状态，封装了各个变量
  */
 struct aeEventLoop;
 
@@ -86,14 +86,11 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 
 /* File event structure
- *
  * 文件事件结构
  */
 typedef struct aeFileEvent {
-
     // 监听事件类型掩码，
-    // 值可以是 AE_READABLE 或 AE_WRITABLE ，
-    // 或者 AE_READABLE | AE_WRITABLE
+    // 值可以是 AE_READABLE 或 AE_WRITABLE ，或者 AE_READABLE | AE_WRITABLE
     int mask; /* one of AE_(READABLE|WRITABLE) */
 
     // 读事件处理器
@@ -108,11 +105,9 @@ typedef struct aeFileEvent {
 } aeFileEvent;
 
 /* Time event structure
- *
  * 时间事件结构
  */
 typedef struct aeTimeEvent {
-
     // 时间事件的唯一标识符
     long long id; /* time event identifier. */
 
@@ -135,31 +130,24 @@ typedef struct aeTimeEvent {
 } aeTimeEvent;
 
 /* A fired event
- *
- * 已就绪事件
+ * 已就绪事件，包括fd（哪个fd已ok）和mask（什么事件ok，读或写事件？）
  */
 typedef struct aeFiredEvent {
-
     // 已就绪文件描述符
     int fd;
 
-    // 事件类型掩码，
-    // 值可以是 AE_READABLE 或 AE_WRITABLE
-    // 或者是两者的或
+    // 事件类型掩码， 值可以是 AE_READABLE 或 AE_WRITABLE或者是两者的或
     int mask;
-
 } aeFiredEvent;
 
 /* State of an event based program 
- *
  * 事件处理器的状态
  */
 typedef struct aeEventLoop {
-
     // 目前已注册的最大描述符
     int maxfd;   /* highest file descriptor currently registered */
 
-    // 目前已追踪的最大描述符
+    // 监控的文件描述的数量
     int setsize; /* max number of file descriptors tracked */
 
     // 用于生成时间事件 id
@@ -180,7 +168,7 @@ typedef struct aeEventLoop {
     // 事件处理器的开关
     int stop;
 
-    // 多路复用库的私有数据
+    // 多路复用库的私有数据，等于aeApiState
     void *apidata; /* This is used for polling API specific data */
 
     // 在处理事件前要执行的函数
