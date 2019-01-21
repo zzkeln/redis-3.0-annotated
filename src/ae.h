@@ -156,10 +156,10 @@ typedef struct aeEventLoop {
     // 最后一次执行时间事件的时间
     time_t lastTime;     /* Used to detect system clock skew */
 
-    // 已注册的文件事件
+    // 已注册的监控文件事件，数组，每个数据成员包含mask，注意apidata=aeApiState（stata中包括event_pool* events数组）
     aeFileEvent *events; /* Registered events */
 
-    // 已就绪的文件事件
+    // 已就绪的文件事件，数组，每个数据成员包含fd和就绪的mask
     aeFiredEvent *fired; /* Fired events */
 
     // 时间事件
