@@ -46,6 +46,7 @@
 
 /* Include the best multiplexing layer supported by this system.
  * The following should be ordered by performances, descending. */
+//根据os选择合适的多路复用。
 #ifdef HAVE_EVPORT
 #include "ae_evport.c"
 #else
@@ -61,18 +62,18 @@
 #endif
 
 /*
- * 初始化事件处理器状态
+ * 创建并初始化事件处理器状态（内部会调用epoll_create将epoll实例创建出来）
  */
 aeEventLoop *aeCreateEventLoop(int setsize) {
     aeEventLoop *eventLoop;
     int i;
 
-    // 创建事件状态结构
+    // 分配aeEventLoop内存
     if ((eventLoop = zmalloc(sizeof(*eventLoop))) == NULL) goto err;
 
-    // 初始化文件事件结构和已就绪文件事件结构数组
-    eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize);
-    eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize);
+    // 初始化监控文件事件结构和已就绪文件事件结构数组
+    eventLoop->events = zmalloc(sizeof(aeFileEvent)*setsize); //分配setsize个aeFileEvent内存
+    eventLoop->fired = zmalloc(sizeof(aeFiredEvent)*setsize); //分配setsize个就绪文件数组内存
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     // 设置数组大小
     eventLoop->setsize = setsize;
@@ -86,11 +87,13 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->stop = 0;
     eventLoop->maxfd = -1;
     eventLoop->beforesleep = NULL;
+    //epoll：创建aeApiState内存，调用epoll_create来初始化state.epfd和state里的epoll_event* events分配内存
+    //设置eventLoop.apidata=aeApiState
     if (aeApiCreate(eventLoop) == -1) goto err;
 
     /* Events with mask == AE_NONE are not set. So let's initialize the
      * vector with it. */
-    // 初始化监听事件
+    // 初始化监听事件，状态设置为NONE
     for (i = 0; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
 
@@ -99,6 +102,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
 
 err:
     if (eventLoop) {
+	//释放监控events、已就绪events和eventLoop的内存
         zfree(eventLoop->events);
         zfree(eventLoop->fired);
         zfree(eventLoop);
@@ -113,41 +117,41 @@ int aeGetSetSize(aeEventLoop *eventLoop) {
 }
 
 /* Resize the maximum set size of the event loop.
- *
  * 调整事件槽的大小
- *
  * If the requested set size is smaller than the current set size, but
  * there is already a file descriptor in use that is >= the requested
  * set size minus one, AE_ERR is returned and the operation is not
  * performed at all.
- *
  * 如果尝试调整大小为 setsize ，但是有 >= setsize 的文件描述符存在
  * 那么返回 AE_ERR ，不进行任何动作。
- *
  * Otherwise AE_OK is returned and the operation is successful. 
- *
  * 否则，执行大小调整操作，并返回 AE_OK 。
  */
+//调整监控事件数量：需要调整state内的events数量和eventLoop内的events和fired大小
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     int i;
 
-    if (setsize == eventLoop->setsize) return AE_OK;
-    if (eventLoop->maxfd >= setsize) return AE_ERR;
+    if (setsize == eventLoop->setsize) return AE_OK; //大小不变，直接返回
+    if (eventLoop->maxfd >= setsize) return AE_ERR; //最大的fd大于setsize，返回错误
+	
+    //epoll：调用state中epoll_event* event的大小，使用realloc来调整
     if (aeApiResize(eventLoop,setsize) == -1) return AE_ERR;
 
+    //调整eventLoop中events和fired大小，使用realloc调整
     eventLoop->events = zrealloc(eventLoop->events,sizeof(aeFileEvent)*setsize);
     eventLoop->fired = zrealloc(eventLoop->fired,sizeof(aeFiredEvent)*setsize);
     eventLoop->setsize = setsize;
 
     /* Make sure that if we created new slots, they are initialized with
      * an AE_NONE mask. */
+    //从maxfd+1到setsize，设置新事件为None
     for (i = eventLoop->maxfd+1; i < setsize; i++)
         eventLoop->events[i].mask = AE_NONE;
     return AE_OK;
 }
 
 /*
- * 删除事件处理器
+ * 删除事件处理器，依次释放events、fired和整个eventLoop
  */
 void aeDeleteEventLoop(aeEventLoop *eventLoop) {
     aeApiFree(eventLoop);
@@ -164,30 +168,33 @@ void aeStop(aeEventLoop *eventLoop) {
 }
 
 /*
- * 根据 mask 参数的值，监听 fd 文件的状态，
- * 当 fd 可用时，执行 proc 函数
+ * 根据 mask 参数的值，监听 fd 文件的状态，当 fd 可用时，执行 proc 函数
  */
+//添加fd的mask监控到epoll中
 int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData)
 {
+    //如果setsize是events大小，fd是events下标，fd必须小于setsize
     if (fd >= eventLoop->setsize) {
         errno = ERANGE;
         return AE_ERR;
     }
 
-    if (fd >= eventLoop->setsize) return AE_ERR;
+    if (fd >= eventLoop->setsize) return AE_ERR; //什么鬼，和上面一样的？
 
     // 取出文件事件结构
     aeFileEvent *fe = &eventLoop->events[fd];
 
     // 监听指定 fd 的指定事件
+    // epoll中，会将fd添加到epoll中进行监听。如果mask包含READABLE，就将state.events与EPOLLIN相与，如果mask包含
+    //WRITABLE，就将state.events与EPOLLOUT相与。调用epoll_ctl添加到epoll内部的红黑树中
     if (aeApiAddEvent(eventLoop, fd, mask) == -1)
         return AE_ERR;
 
     // 设置文件事件类型，以及事件的处理器
-    fe->mask |= mask;
-    if (mask & AE_READABLE) fe->rfileProc = proc;
-    if (mask & AE_WRITABLE) fe->wfileProc = proc;
+    fe->mask |= mask;//更新事件类型
+    if (mask & AE_READABLE) fe->rfileProc = proc;//如果监听可读，设置可读事件处理器
+    if (mask & AE_WRITABLE) fe->wfileProc = proc;//如果监听可写，设置可写事件处理器
 
     // 私有数据
     fe->clientData = clientData;
@@ -204,6 +211,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
  */
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 {
+    //fd必须小于setsize
     if (fd >= eventLoop->setsize) return;
 
     // 取出文件事件结构
@@ -212,12 +220,14 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
     // 未设置监听的事件类型，直接返回
     if (fe->mask == AE_NONE) return;
 
-    // 计算新掩码
+    // 计算新掩码。如果fe->mask=可读|可写，而mask=可写，表示要将fd去掉可写监控，那么fe->mask&(~mask)就只剩下可读了
     fe->mask = fe->mask & (~mask);
+	
+    //如果fd是最大fd，并且去掉mask监控后不再监控任何事件了，那么需要更新maxfd
     if (fd == eventLoop->maxfd && fe->mask == AE_NONE) {
         /* Update the max fd */
         int j;
-
+	//从maxfd-1开始查找，第一个监控某事件的fd就是最大maxfd
         for (j = eventLoop->maxfd-1; j >= 0; j--)
             if (eventLoop->events[j].mask != AE_NONE) break;
         eventLoop->maxfd = j;
@@ -238,8 +248,7 @@ int aeGetFileEvents(aeEventLoop *eventLoop, int fd) {
 }
 
 /*
- * 取出当前时间的秒和毫秒，
- * 并分别将它们保存到 seconds 和 milliseconds 参数中
+ * 取出当前时间的秒和毫秒，并分别将它们保存到 seconds 和 milliseconds 参数中
  */
 static void aeGetTime(long *seconds, long *milliseconds)
 {
@@ -251,8 +260,7 @@ static void aeGetTime(long *seconds, long *milliseconds)
 }
 
 /*
- * 在当前时间上加上 milliseconds 毫秒，
- * 并且将加上之后的秒数和毫秒数分别保存在 sec 和 ms 指针中。
+ * 在当前时间上加上 milliseconds 毫秒，并且将加上之后的秒数和毫秒数分别保存在 sec 和 ms 指针中。
  */
 static void aeAddMillisecondsToNow(long long milliseconds, long *sec, long *ms) {
     long cur_sec, cur_ms, when_sec, when_ms;
@@ -284,19 +292,19 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
         aeTimeProc *proc, void *clientData,
         aeEventFinalizerProc *finalizerProc)
 {
-    // 更新时间计数器
+    // 更新时间计数器，直接将id++即可
     long long id = eventLoop->timeEventNextId++;
 
     // 创建时间事件结构
     aeTimeEvent *te;
 
-    te = zmalloc(sizeof(*te));
+    te = zmalloc(sizeof(*te)); //为时间事件结构分配内存
     if (te == NULL) return AE_ERR;
 
-    // 设置 ID
+    // 设置时间事件id
     te->id = id;
 
-    // 设定处理事件的时间
+    // 设定处理事件的时间，设置过期时间到te中
     aeAddMillisecondsToNow(milliseconds,&te->when_sec,&te->when_ms);
     // 设置事件处理器
     te->timeProc = proc;
@@ -304,11 +312,11 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
     // 设置私有数据
     te->clientData = clientData;
 
-    // 将新事件放入表头
+    // 将新的时间事件放入eventLoop中的链表头上
     te->next = eventLoop->timeEventHead;
     eventLoop->timeEventHead = te;
 
-    return id;
+    return id; //返回时间事件id
 }
 
 /*
@@ -316,16 +324,16 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
  */
 int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
 {
-    aeTimeEvent *te, *prev = NULL;
+    aeTimeEvent *te, *prev = NULL; 
 
-    // 遍历链表
+    // 遍历时间事件链表
     te = eventLoop->timeEventHead;
     while(te) {
-
+	 //prev记录遍历的前一个节点
         // 发现目标事件，删除
         if (te->id == id) {
-
             if (prev == NULL)
+		//说明删除的是链表头，更新表头
                 eventLoop->timeEventHead = te->next;
             else
                 prev->next = te->next;
@@ -357,14 +365,14 @@ int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
  *    Much better but still insertion or deletion of timers is O(N).
  * 2) Use a skiplist to have this operation as O(1) and insertion as O(log(N)).
  */
-// 寻找里目前时间最近的时间事件
-// 因为链表是乱序的，所以查找复杂度为 O（N）
+// 寻找里目前时间最近的时间事件, 因为链表是乱序的，所以查找复杂度为 O（N）
 static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 {
     aeTimeEvent *te = eventLoop->timeEventHead;
     aeTimeEvent *nearest = NULL;
 
     while(te) {
+	//如果nearest是空 或 nearest时间小于te，那么更新nearest为te
         if (!nearest || te->when_sec < nearest->when_sec ||
                 (te->when_sec == nearest->when_sec &&
                  te->when_ms < nearest->when_ms))
@@ -375,7 +383,6 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 }
 
 /* Process time events
- *
  * 处理所有已到达的时间事件
  */
 static int processTimeEvents(aeEventLoop *eventLoop) {
@@ -392,8 +399,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
      * events to be processed ASAP when this happens: the idea is that
      * processing events earlier is less dangerous than delaying them
      * indefinitely, and practice suggests it is. */
-    // 通过重置事件的运行时间，
-    // 防止因时间穿插（skew）而造成的事件处理混乱
+    // 通过重置事件的运行时间，防止因时间穿插（skew）而造成的事件处理混乱
     if (now < eventLoop->lastTime) {
         te = eventLoop->timeEventHead;
         while(te) {
@@ -404,15 +410,14 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
     // 更新最后一次处理时间事件的时间
     eventLoop->lastTime = now;
 
-    // 遍历链表
-    // 执行那些已经到达的事件
+    // 遍历链表，执行那些已经到达的事件
     te = eventLoop->timeEventHead;
-    maxId = eventLoop->timeEventNextId-1;
+    maxId = eventLoop->timeEventNextId-1; //timeEventNextId是下个可用的时间事件id，获取当前最大时间事件id
     while(te) {
         long now_sec, now_ms;
         long long id;
 
-        // 跳过无效事件
+        // 如果id大于最大时间事件id，那么说明这个时间事件是在当前遍历链表时产生的，那么跳过这个时间事件
         if (te->id > maxId) {
             te = te->next;
             continue;
@@ -421,7 +426,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
         // 获取当前时间
         aeGetTime(&now_sec, &now_ms);
 
-        // 如果当前时间等于或等于事件的执行时间，那么说明事件已到达，执行这个事件
+        // 如果当前时间等于或大于事件的执行时间，那么说明事件已到达，执行这个事件
         if (now_sec > te->when_sec ||
             (now_sec == te->when_sec && now_ms >= te->when_ms))
         {
@@ -444,6 +449,8 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
              * to flag deleted elements in a special way for later
              * deletion (putting references to the nodes to delete into
              * another linked list). */
+	    //todo：这里有点没理解？新加入的时间事件难道不仅仅是当前执行是的时间事件内添加的吗？因为如果仅仅是当前时间事件内添加的，
+	    //那么这个新的时间事件肯定加在链表头，它的id是会大于maxId，感觉不需要再从链表头遍历了？？？
 
             // 记录是否有需要循环执行这个事件时间
             if (retval != AE_NOMORE) {
@@ -454,8 +461,7 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
                 aeDeleteTimeEvent(eventLoop, id);
             }
 
-            // 因为执行事件之后，事件列表可能已经被改变了
-            // 因此需要将 te 放回表头，继续开始执行事件
+            // 因为执行事件之后，事件列表可能已经被改变了。因此需要将 te 放回表头，继续开始执行事件
             te = eventLoop->timeEventHead;
         } else {
             te = te->next;
@@ -466,14 +472,10 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
 
 /* Process every pending time event, then every pending file event
  * (that may be registered by time event callbacks just processed).
- *
  * 处理所有已到达的时间事件，以及所有已就绪的文件事件。
- *
  * Without special flags the function sleeps until some file event
  * fires, or when the next time event occurs (if any).
- *
- * 如果不传入特殊 flags 的话，那么函数睡眠直到文件事件就绪，
- * 或者下个时间事件到达（如果有的话）。
+ * 如果不传入特殊 flags 的话，那么函数睡眠直到文件事件就绪，或者下个时间事件到达（如果有的话）。
  *
  * If flags is 0, the function does nothing and returns.
  * 如果 flags 为 0 ，那么函数不作动作，直接返回。
@@ -489,30 +491,33 @@ static int processTimeEvents(aeEventLoop *eventLoop) {
  *
  * if flags has AE_DONT_WAIT set the function returns ASAP until all
  * the events that's possible to process without to wait are processed.
- * 如果 flags 包含 AE_DONT_WAIT ，
- * 那么函数在处理完所有不许阻塞的事件之后，即刻返回。
+ * 如果 flags 包含 AE_DONT_WAIT ，那么函数在处理完所有不许阻塞的事件之后，即刻返回。
  *
  * The function returns the number of events processed. 
  * 函数的返回值为已处理事件的数量
  */
+//进行epoll_wait，优先处理文件事件（某个文件如果同时可读写，那么优先进行读，下次epoll_wait再进行写），其次处理时间事件
+//将最近的时间事件距离目前的时间差作为epoll_wait的超时时间
 int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 {
     int processed = 0, numevents;
 
     /* Nothing to do? return ASAP */
+    //既不处理文件事件，也不处理时间事件，那么直接返回吧
     if (!(flags & AE_TIME_EVENTS) && !(flags & AE_FILE_EVENTS)) return 0;
 
     /* Note that we want call select() even if there are no
      * file events to process as long as we want to process time
      * events, in order to sleep until the next time event is ready
      * to fire. */
+    //如果监控了文件事件 并且 也需要处理时间事件
     if (eventLoop->maxfd != -1 ||
         ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
         int j;
         aeTimeEvent *shortest = NULL;
         struct timeval tv, *tvp;
 
-        // 获取最近的时间事件
+        // 获取最近的时间事件，将目前距离最近的时间事件的时间差 作为文件事件epoll-wait的超时值
         if (flags & AE_TIME_EVENTS && !(flags & AE_DONT_WAIT))
             shortest = aeSearchNearestTimer(eventLoop);
         if (shortest) {
@@ -537,9 +542,8 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             // 时间差小于 0 ，说明事件已经可以执行了，将秒和毫秒设为 0 （不阻塞）
             if (tvp->tv_sec < 0) tvp->tv_sec = 0;
             if (tvp->tv_usec < 0) tvp->tv_usec = 0;
-        } else {
-            
-            // 执行到这一步，说明没有时间事件
+        } else {   
+            // 执行到这一步，说明没有时间事件（时间事件链表为空）
             // 那么根据 AE_DONT_WAIT 是否设置来决定是否阻塞，以及阻塞的时间长度
 
             /* If we have to check for events but need to return
@@ -556,10 +560,10 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             }
         }
 
-        // 处理文件事件，阻塞时间由 tvp 决定
+        // 处理文件事件，阻塞时间由 tvp 决定（距离最近的时间事件的时间差）
         numevents = aeApiPoll(eventLoop, tvp);
         for (j = 0; j < numevents; j++) {
-            // 从已就绪数组中获取事件
+            // 从已就绪数组中获取文件事件
             aeFileEvent *fe = &eventLoop->events[eventLoop->fired[j].fd];
 
             int mask = eventLoop->fired[j].mask;
@@ -569,9 +573,9 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
            /* note the fe->mask & mask & ... code: maybe an already processed
              * event removed an element that fired and we still didn't
              * processed, so we check if the event is still valid. */
-            // 读事件
+            // 如果是读事件
             if (fe->mask & mask & AE_READABLE) {
-                // rfired 确保读/写事件只能执行其中一个
+                // rfired 确保读/写事件只能执行其中一个，优先执行读函数
                 rfired = 1;
                 fe->rfileProc(eventLoop,fd,fe->clientData,mask);
             }
@@ -595,7 +599,6 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
 
 /* Wait for milliseconds until the given file descriptor becomes
  * writable/readable/exception 
- *
  * 在给定毫秒内等待，直到 fd 变成可写、可读或异常
  */
 int aeWait(int fd, int mask, long long milliseconds) {
@@ -622,11 +625,9 @@ int aeWait(int fd, int mask, long long milliseconds) {
  * 事件处理器的主循环
  */
 void aeMain(aeEventLoop *eventLoop) {
-
     eventLoop->stop = 0;
 
     while (!eventLoop->stop) {
-
         // 如果有需要在事件处理前执行的函数，那么运行它
         if (eventLoop->beforesleep != NULL)
             eventLoop->beforesleep(eventLoop);
