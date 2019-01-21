@@ -81,6 +81,7 @@ struct aeEventLoop;
  * 事件接口
  */
 typedef void aeFileProc(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
+//这个函数如果返回-1，表示这个时间事件不需要再执行了，否则返回整数ret表示过ret毫秒后再次执行这个时间事件
 typedef int aeTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData);
 typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientData);
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
@@ -150,22 +151,23 @@ typedef struct aeEventLoop {
     // 监控的文件描述的数量
     int setsize; /* max number of file descriptors tracked */
 
-    // 用于生成时间事件 id
+    // 用于生成时间事件 id。表示下个可用的时间事件id，从0开始，每个时间事件通过++来分配
     long long timeEventNextId;
 
     // 最后一次执行时间事件的时间
     time_t lastTime;     /* Used to detect system clock skew */
 
-    // 已注册的监控文件事件，数组，每个数据成员包含mask，注意apidata=aeApiState（stata中包括event_pool* events数组）
+    // 已注册的监控文件事件，数组，每个数据成员包含mask，其中fd就是对应数组下标，events[i]表示fd=i的事件。
+    //注意apidata=aeApiState（stata中包括event_pool* events数组）
     aeFileEvent *events; /* Registered events */
 
     // 已就绪的文件事件，数组，每个数据成员包含fd和就绪的mask
     aeFiredEvent *fired; /* Fired events */
 
-    // 时间事件
+    // 时间事件链表。新的时间事件加入会放入链表头部
     aeTimeEvent *timeEventHead;
 
-    // 事件处理器的开关
+    // 事件处理器的开关，1表示停止事件处理器
     int stop;
 
     // 多路复用库的私有数据，等于aeApiState
