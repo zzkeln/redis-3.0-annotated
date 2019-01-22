@@ -37,14 +37,17 @@ static void setProtocolError(redisClient *c, int pos);
  * allocated objects, however we can't used zmalloc_size() directly on sds
  * strings because of the trick they use to work (the header is before the
  * returned pointer), so we use this helper function. */
-// 计算输出缓冲区的大小 
+// 计算输出缓冲区的大小：将sds前移sdshdr，然后取出前缀prefix，是分配的内存大小
 size_t zmalloc_size_sds(sds s) {
     return zmalloc_size(s-sizeof(struct sdshdr));
 }
 
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. */
-// 返回 object->ptr 所指向的字符串对象所使用的内存数量。
+// 返回 object->ptr 所指向的字符串对象中字符串大小
+//如果是raw编码，直接使用zmalloc分配的ptr，所以取出前缀prefix，是字符串大小
+//如果是embstr编码，那么字符串对象和ptr一起分配的，ptr前面没有prefix来记录字节大小，因为embstr的free=0，所以直接用sdslen
+//来返回sds中的len字节就是字符串大小
 size_t getStringObjectSdsUsedMemory(robj *o) {
     redisAssertWithInfo(NULL,o,o->type == REDIS_STRING);
     switch(o->encoding) {
@@ -55,7 +58,7 @@ size_t getStringObjectSdsUsedMemory(robj *o) {
 }
 
 /*
- * 回复内容复制函数
+ * 回复内容复制函数：增加引用计数
  */
 void *dupClientReplyValue(void *o) {
     incrRefCount((robj*)o);
@@ -63,7 +66,8 @@ void *dupClientReplyValue(void *o) {
 }
 
 /*
- * 订阅模式对比函数
+ * 订阅模式对比函数，比较2个字符串对象是否相同。如果是int编码，直接比较long整数是否相等。如果是raw|embstr编码
+ 那么用memcpy比较二进制数据是否相等
  */
 int listMatchObjects(void *a, void *b) {
     return equalStringObjects(a,b);
@@ -73,7 +77,6 @@ int listMatchObjects(void *a, void *b) {
  * 创建一个新客户端
  */
 redisClient *createClient(int fd) {
-
     // 分配空间
     redisClient *c = zmalloc(sizeof(redisClient));
 
@@ -81,10 +84,10 @@ redisClient *createClient(int fd) {
      * This is useful since all the Redis commands needs to be executed
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
-    // 当 fd 不为 -1 时，创建带网络连接的客户端
+    // 当 fd 不为 -1 时，创建带网络连接的客户端（epoll_ctl添加fd的可读事件监控到epoll实例中）
     // 如果 fd 为 -1 ，那么创建无网络连接的伪客户端
-    // 因为 Redis 的命令必须在客户端的上下文中使用，所以在执行 Lua 环境中的命令时
-    // 需要用到这种伪终端
+    // 因为 Redis 的命令必须在客户端的上下文中使用，所以在执行 Lua 环境中的命令时需要用到这种伪终端
+    // 回放aof文件时也需要fd=-1的伪客户端
     if (fd != -1) {
         // 非阻塞
         anetNonBlock(NULL,fd);
@@ -94,6 +97,7 @@ redisClient *createClient(int fd) {
         if (server.tcpkeepalive)
             anetKeepAlive(NULL,fd,server.tcpkeepalive);
         // 绑定读事件到事件 loop （开始接收命令请求）
+        //将fd监听可读事件，用epoll_ctl添加到epoll实例中。如果fd可读了，调用readQueryFromClient来读取客户端命令
         if (aeCreateFileEvent(server.el,fd,AE_READABLE,
             readQueryFromClient, c) == AE_ERR)
         {
