@@ -1171,19 +1171,16 @@ void resetClient(redisClient *c) {
 
 /*
  * 处理内联命令，并创建参数对象
- *
  * 内联命令的各个参数以空格分开，并以 \r\n 结尾
  * 例子：
- *
  * <arg0> <arg1> <arg...> <argN>\r\n
- *
  * 这些内容会被用于创建参数对象，
  * 比如
- *
  * argv[0] = arg0
  * argv[1] = arg1
  * argv[2] = arg2
  */
+//将querybuf解析放入argv[0...argc-1]中
 int processInlineBuffer(redisClient *c) {
     char *newline;
     int argc, j;
@@ -1232,14 +1229,13 @@ int processInlineBuffer(redisClient *c) {
 
     /* Leave data after the first line of the query in the buffer */
 
-    // 从缓冲区中删除已 argv 已读取的内容
-    // 剩余的内容是未读取的
+    // 从缓冲区中删除已 argv 已读取的内容。剩余的内容是未读取的
     sdsrange(c->querybuf,querylen+2,-1);
 
     /* Setup argv array on client structure */
     // 为客户端的参数分配空间
     if (c->argv) zfree(c->argv);
-    c->argv = zmalloc(sizeof(robj*)*argc);
+    c->argv = zmalloc(sizeof(robj*)*argc);//argv包含argc个对象指针
 
     /* Create redis objects for all arguments. */
     // 为每个参数创建一个字符串对象
@@ -1247,13 +1243,12 @@ int processInlineBuffer(redisClient *c) {
         if (sdslen(argv[j])) {
             // argv[j] 已经是 SDS 了
             // 所以创建的字符串对象直接指向该 SDS
-            c->argv[c->argc] = createObject(REDIS_STRING,argv[j]);
+            c->argv[c->argc] = createObject(REDIS_STRING,argv[j]);//创建字符串对象
             c->argc++;
         } else {
             sdsfree(argv[j]);
         }
     }
-
     zfree(argv);
 
     return REDIS_OK;
@@ -1273,9 +1268,7 @@ static void setProtocolError(redisClient *c, int pos) {
     sdsrange(c->querybuf,pos,-1);
 }
 
-/*
- * 将 c->querybuf 中的协议内容转换成 c->argv 中的参数对象
- * 
+/* 将 c->querybuf 中的协议内容转换成 c->argv 中的参数对象
  * 比如 *3\r\n$3\r\nSET\r\n$3\r\nMSG\r\n$5\r\nHELLO\r\n
  * 将被转换为：
  * argv[0] = SET
@@ -1351,11 +1344,9 @@ int processMultibulkBuffer(redisClient *c) {
 
     // 从 c->querybuf 中读入参数，并创建各个参数对象到 c->argv
     while(c->multibulklen) {
-
         /* Read bulk length if unknown */
         // 读入参数长度
         if (c->bulklen == -1) {
-
             // 确保 "\r\n" 存在
             newline = strchr(c->querybuf+pos,'\r');
             if (newline == NULL) {
@@ -1469,14 +1460,12 @@ int processMultibulkBuffer(redisClient *c) {
 
 // 处理客户端输入的命令内容
 void processInputBuffer(redisClient *c) {
-
     /* Keep processing while there is something in the input buffer */
     // 尽可能地处理查询缓冲区中的内容
     // 如果读取出现 short read ，那么可能会有内容滞留在读取缓冲区里面
     // 这些滞留内容也许不能完整构成一个符合协议的命令，
     // 需要等待下次读事件的就绪
     while(sdslen(c->querybuf)) {
-
         /* Return if clients are paused. */
         // 如果客户端正处于暂停状态，那么直接返回
         if (!(c->flags & REDIS_SLAVE) && clientsArePaused()) return;
@@ -1529,7 +1518,7 @@ void processInputBuffer(redisClient *c) {
 }
 
 /*
- * 读取客户端的查询缓冲区内容
+ * 读取客户端的查询缓冲区内容，当fd可读时，会调用这个函数从fd读取内容到querybuf中
  */
 void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *c = (redisClient*) privdata;
@@ -1541,7 +1530,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     // 设置服务器的当前客户端
     server.current_client = c;
     
-    // 读入长度（默认为 16 MB）
+    // 读入长度（默认为 16 KB）
     readlen = REDIS_IOBUF_LEN;
 
     /* If this is a multi bulk request, and we are processing a bulk reply
@@ -1564,9 +1553,9 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     qblen = sdslen(c->querybuf);
     // 如果有需要，更新缓冲区内容长度的峰值（peak）
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
-    // 为查询缓冲区分配空间
+    // 为查询缓冲区分配空间，分配readlen的长度
     c->querybuf = sdsMakeRoomFor(c->querybuf, readlen);
-    // 读入内容到查询缓存
+    // 读入内容到查询缓存，尝试读入16k的内容
     nread = read(fd, c->querybuf+qblen, readlen);
 
     // 读入出错
@@ -1578,7 +1567,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             freeClient(c);
             return;
         }
-    // 遇到 EOF
+    // 遇到 EOF，释放redisClient
     } else if (nread == 0) {
         redisLog(REDIS_VERBOSE, "Client closed connection");
         freeClient(c);
@@ -1588,7 +1577,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (nread) {
         // 根据内容，更新查询缓冲区（SDS） free 和 len 属性
         // 并将 '\0' 正确地放到内容的最后
-        sdsIncrLen(c->querybuf,nread);
+        sdsIncrLen(c->querybuf,nread);//更新len和free属性
         // 记录服务器和客户端最后一次互动的时间
         c->lastinteraction = server.unixtime;
         // 如果客户端是 master 的话，更新它的复制偏移量
@@ -1599,8 +1588,7 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
 
-    // 查询缓冲区长度超出服务器最大缓冲区长度
-    // 清空缓冲区并释放客户端
+    // 查询缓冲区长度超出服务器最大缓冲区长度，清空缓冲区并释放客户端
     if (sdslen(c->querybuf) > server.client_max_querybuf_len) {
         sds ci = catClientInfoString(sdsempty(),c), bytes = sdsempty();
 
@@ -1619,7 +1607,8 @@ void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     server.current_client = NULL;
 }
 
-// 获取客户端目前最大的一块缓冲区的大小
+// 获取客户端目前最大的一块缓冲区的大小，最多reply节点的记录在longest_output_list中
+//最大querybuf的记录在biggest_input_buffer中
 void getClientsMaxBuffers(unsigned long *longest_output_list,
                           unsigned long *biggest_input_buffer) {
     redisClient *c;
@@ -1627,12 +1616,12 @@ void getClientsMaxBuffers(unsigned long *longest_output_list,
     listIter li;
     unsigned long lol = 0, bib = 0;
 
-    listRewind(server.clients,&li);
+    listRewind(server.clients,&li);//遍历server.clients
     while ((ln = listNext(&li)) != NULL) {
         c = listNodeValue(ln);
 
-        if (listLength(c->reply) > lol) lol = listLength(c->reply);
-        if (sdslen(c->querybuf) > bib) bib = sdslen(c->querybuf);
+        if (listLength(c->reply) > lol) lol = listLength(c->reply);//根据reply的长度来更新回复节点长度
+        if (sdslen(c->querybuf) > bib) bib = sdslen(c->querybuf);//根据querybuf更新
     }
     *longest_output_list = lol;
     *biggest_input_buffer = bib;
@@ -1642,6 +1631,7 @@ void getClientsMaxBuffers(unsigned long *longest_output_list,
  * It writes the specified ip/port to "peerid" as a null termiated string
  * in the form ip:port if ip does not contain ":" itself, otherwise
  * [ip]:port format is used (for IPv6 addresses basically). */
+//将ip port写入peerid中
 void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port) {
     if (strchr(ip,':'))
         snprintf(peerid,peerid_len,"[%s]:%d",ip,port);
@@ -1662,6 +1652,7 @@ void formatPeerId(char *peerid, size_t peerid_len, char *ip, int port) {
  * On failure the function still populates 'peerid' with the "?:0" string
  * in case you want to relax error checking or need to display something
  * anyway (see anetPeerToString implementation for more info). */
+//产生ip port信息并将它们写入peerid[0...peerid_len-1]
 int genClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
     char ip[REDIS_IP_STR_LEN];
     int port;
@@ -1682,9 +1673,11 @@ int genClientPeerId(redisClient *client, char *peerid, size_t peerid_len) {
  * if client->perrid is NULL, otherwise returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
+//产生peerid信息并放入redisCient.peerid中。计算一次peerid挺耗时，只计算一次然后就存入redisClient.peerid中
+//后面要用的话就直接返回redisClient.peerid。
 char *getClientPeerId(redisClient *c) {
     char peerid[REDIS_PEER_ID_LEN];
-
+    //如果c->peerid是空，那么计算一次并放入到c->peerid中
     if (c->peerid == NULL) {
         genClientPeerId(c,peerid,sizeof(peerid));
         c->peerid = sdsnew(peerid);
@@ -1728,8 +1721,8 @@ sds catClientInfoString(sds s, redisClient *client) {
         getClientPeerId(client),
         client->fd,
         client->name ? (char*)client->name->ptr : "",
-        (long long)(server.unixtime - client->ctime),
-        (long long)(server.unixtime - client->lastinteraction),
+        (long long)(server.unixtime - client->ctime), //当前时间减去client的创建时间
+        (long long)(server.unixtime - client->lastinteraction),//当前时间减去上次和server互动的时间
         flags,
         client->db->id,
         (int) dictSize(client->pubsub_channels),
@@ -1755,10 +1748,11 @@ sds getAllClientsInfoString(void) {
 
     o = sdsMakeRoomFor(o,200*listLength(server.clients));
     listRewind(server.clients,&li);
+    //遍历server.clients
     while ((ln = listNext(&li)) != NULL) {
         client = listNodeValue(ln);
-        o = catClientInfoString(o,client);
-        o = sdscatlen(o,"\n",1);
+        o = catClientInfoString(o,client);//将client相关信息追加到o中
+        o = sdscatlen(o,"\n",1);//追加一个换行符到o中
     }
     return o;
 }
