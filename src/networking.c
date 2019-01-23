@@ -1765,15 +1765,14 @@ void clientCommand(redisClient *c) {
     listIter li;
     redisClient *client;
 
-    // CLIENT list
+    // CLIENT list：返回client相关信息
     if (!strcasecmp(c->argv[1]->ptr,"list") && c->argc == 2) {
         sds o = getAllClientsInfoString();
         addReplyBulkCBuffer(c,o,sdslen(o));
         sdsfree(o);
 
-    // CLIENT kill
+    // CLIENT kill:释放指定client
     } else if (!strcasecmp(c->argv[1]->ptr,"kill") && c->argc == 3) {
-
         // 遍历客户端链表，并杀死指定地址的客户端
         listRewind(server.clients,&li);
         while ((ln = listNext(&li)) != NULL) {
@@ -1786,7 +1785,7 @@ void clientCommand(redisClient *c) {
                 if (c == client) {
                     client->flags |= REDIS_CLOSE_AFTER_REPLY;
                 } else {
-                    freeClient(client);
+                    freeClient(client);//会从server.clients中删除该client
                 }
                 return;
             }
@@ -1803,7 +1802,7 @@ void clientCommand(redisClient *c) {
         // 名字为空时，清空客户端的名字
         if (len == 0) {
             if (c->name) decrRefCount(c->name);
-            c->name = NULL;
+            c->name = NULL;//设置client名字为空
             addReply(c,shared.ok);
             return;
         }
@@ -1819,8 +1818,8 @@ void clientCommand(redisClient *c) {
                 return;
             }
         }
-        if (c->name) decrRefCount(c->name);
-        c->name = c->argv[2];
+        if (c->name) decrRefCount(c->name);//减少c->name的引用计数
+        c->name = c->argv[2];//设置新名字
         incrRefCount(c->name);
         addReply(c,shared.ok);
 
@@ -1884,14 +1883,14 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
     robj *oldval;
    
     redisAssertWithInfo(c,NULL,i < c->argc);
-    oldval = c->argv[i];
+    oldval = c->argv[i];//旧参数
     c->argv[i] = newval;
-    incrRefCount(newval);
-    decrRefCount(oldval);
+    incrRefCount(newval);//增加新参数的引用计数
+    decrRefCount(oldval);//减少旧参数的引用计数
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
-        c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);
+        c->cmd = lookupCommandOrOriginal(c->argv[0]->ptr);//替换命令
         redisAssertWithInfo(c,NULL,c->cmd != NULL);
     }
 }
