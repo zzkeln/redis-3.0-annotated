@@ -109,7 +109,7 @@ redisClient *createClient(int fd) {
 
     // 初始化各个属性
 
-    // 默认数据库
+    // 设置默认数据库，设置redisClient的db指向server的0号db
     selectDb(c,0);
     // 套接字
     c->fd = fd;
@@ -158,8 +158,8 @@ redisClient *createClient(int fd) {
     // 回复缓冲区大小达到软限制的时间
     c->obuf_soft_limit_reached_time = 0;
     // 回复链表的释放和复制函数
-    listSetFreeMethod(c->reply,decrRefCountVoid);
-    listSetDupMethod(c->reply,dupClientReplyValue);
+    listSetFreeMethod(c->reply,decrRefCountVoid);//节点释放函数是减少引用计数，如果引用计数等于0了，那么根据对象类型释放相应对象
+    listSetDupMethod(c->reply,dupClientReplyValue);//节点复制函数，增加对象引用计数
     // 阻塞类型
     c->btype = REDIS_BLOCKED_NONE;
     // 阻塞超时
@@ -180,7 +180,7 @@ redisClient *createClient(int fd) {
     c->peerid = NULL;
     listSetFreeMethod(c->pubsub_patterns,decrRefCountVoid);
     listSetMatchMethod(c->pubsub_patterns,listMatchObjects);
-    // 如果不是伪客户端，那么添加到服务器的客户端链表中
+    // 如果不是伪客户端，那么添加到服务器的客户端链表中。server维护clients的链表
     if (fd != -1) listAddNodeTail(server.clients,c);
     // 初始化客户端的事务状态
     initClientMultiState(c);
@@ -191,13 +191,10 @@ redisClient *createClient(int fd) {
 
 /* This function is called every time we are going to transmit new data
  * to the client. The behavior is the following:
- *
  * 这个函数在每次向客户端发送数据时都会被调用。函数的行为如下：
- *
  * If the client should receive new data (normal clients will) the function
  * returns REDIS_OK, and make sure to install the write handler in our event
  * loop so that when the socket is writable new data gets written.
- *
  * 当客户端可以接收新数据时（通常情况下都是这样），函数返回 REDIS_OK ，
  * 并将写处理器（write handler）安装到事件循环中，
  * 这样当套接字可写时，新数据就会被写入。
@@ -205,16 +202,13 @@ redisClient *createClient(int fd) {
  * If the client should not receive new data, because it is a fake client,
  * a master, a slave not yet online, or because the setup of the write handler
  * failed, the function returns REDIS_ERR.
- *
  * 对于那些不应该接收新数据的客户端，
  * 比如伪客户端、 master 以及 未 ONLINE 的 slave ，
  * 或者写处理器安装失败时，
  * 函数返回 REDIS_ERR 。
- *
  * Typically gets called every time a reply is built, before adding more
  * data to the clients output buffers. If the function returns REDIS_ERR no
  * data should be appended to the output buffers. 
- *
  * 通常在每个回复被创建时调用，如果函数返回 REDIS_ERR ，
  * 那么没有数据会被追加到输出缓冲区。
  */
@@ -235,6 +229,7 @@ int prepareClientToWrite(redisClient *c) {
     if (c->bufpos == 0 && listLength(c->reply) == 0 &&
         (c->replstate == REDIS_REPL_NONE ||
          c->replstate == REDIS_REPL_ONLINE) &&
+        //添加fd的可写事件监控到epoll实例中，当可写时，调用sendReplyToClient函数
         aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
         sendReplyToClient, c) == AE_ERR) return REDIS_ERR;
 
@@ -243,18 +238,19 @@ int prepareClientToWrite(redisClient *c) {
 
 /* Create a duplicate of the last object in the reply list when
  * it is not exclusively owned by the reply list. */
-// 当回复列表中的最后一个对象并非属于回复的一部分时
-// 创建该对象的一个复制品
+//  当回复列表中的最后一个对象也被其它对象引用时即引用计数大于1，创建该对象的一个复制品并让链表最后一个节点指向该对象
+// 就是确保回复列表中最后一个对象的引用计数仅为1
 robj *dupLastObjectIfNeeded(list *reply) {
     robj *new, *cur;
     listNode *ln;
     redisAssert(listLength(reply) > 0);
-    ln = listLast(reply);
-    cur = listNodeValue(ln);
+    ln = listLast(reply);//最后一个链表节点
+    cur = listNodeValue(ln);//获得链表节点的对象
+    //如果cur被多个对象引用
     if (cur->refcount > 1) {
-        new = dupStringObject(cur);
-        decrRefCount(cur);
-        listNodeValue(ln) = new;
+        new = dupStringObject(cur); //创建对象的一个复制品
+        decrRefCount(cur);//减少cur的引用计数
+        listNodeValue(ln) = new;//让链表节点指向这个新对象，其中新对象的引用计数是1
     }
     return listNodeValue(ln);
 }
