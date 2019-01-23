@@ -260,10 +260,10 @@ robj *dupLastObjectIfNeeded(list *reply) {
  * -------------------------------------------------------------------------- */
 
 /*
- * 尝试将回复添加到 c->buf 中
+ * 尝试将回复s[0...len-1]添加到 c->buf 中（buf是16k的数组）
  */
 int _addReplyToBuffer(redisClient *c, char *s, size_t len) {
-    size_t available = sizeof(c->buf)-c->bufpos;
+    size_t available = sizeof(c->buf)-c->bufpos;//buf空闲空间大小
 
     // 正准备关闭客户端，无须再发送内容
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) return REDIS_OK;
@@ -279,7 +279,7 @@ int _addReplyToBuffer(redisClient *c, char *s, size_t len) {
 
     // 复制内容到 c->buf 里面
     memcpy(c->buf+c->bufpos,s,len);
-    c->bufpos+=len;
+    c->bufpos+=len;//更新buf的偏移量
 
     return REDIS_OK;
 }
@@ -295,34 +295,35 @@ void _addReplyObjectToList(redisClient *c, robj *o) {
 
     // 链表中无缓冲块，直接将对象追加到链表中
     if (listLength(c->reply) == 0) {
-        incrRefCount(o);
-        listAddNodeTail(c->reply,o);
+        incrRefCount(o);//增加o的引用计数
+        listAddNodeTail(c->reply,o);//添加到reply链表中
 
+        c->reply_bytes += getStringObjectSdsUsedMemory(o);//更新恢复链表中的总大小
+    } else {
         // 链表中已有缓冲块，尝试将回复添加到块内
         // 如果当前的块不能容纳回复的话，那么新建一个块
-        c->reply_bytes += getStringObjectSdsUsedMemory(o);
-    } else {
 
-        // 取出表尾的 SDS
+        // 取出reply链表尾部的字符串对象
         tail = listNodeValue(listLast(c->reply));
 
         /* Append to this object when possible. */
-        // 如果表尾 SDS 的已用空间加上对象的长度，小于 REDIS_REPLY_CHUNK_BYTES
-        // 那么将新对象的内容拼接到表尾 SDS 的末尾
+        // 如果表尾 SDS 的已用空间加上对象的长度，小于 REDIS_REPLY_CHUNK_BYTES（16K），那么将新对象的内容拼接到表尾 SDS 的末尾
+        //如果reply链表最后一个节点的字符串对象，编码是raw并且加上o的大小小于16k
         if (tail->ptr != NULL &&
             tail->encoding == REDIS_ENCODING_RAW &&
             sdslen(tail->ptr)+sdslen(o->ptr) <= REDIS_REPLY_CHUNK_BYTES)
         {
-            c->reply_bytes -= zmalloc_size_sds(tail->ptr);
-            tail = dupLastObjectIfNeeded(c->reply);
+            //更新reply总字节数：因为sdscat可能会预分配内存，所以先减去tail节点字节数，然后sdscat，然后再累加tail节点字节数
+            c->reply_bytes -= zmalloc_size_sds(tail->ptr); //先减去tail的字节数
+            tail = dupLastObjectIfNeeded(c->reply); //找到reply的最后一个节点并且它的引用计数是1
             // 拼接
-            tail->ptr = sdscatlen(tail->ptr,o->ptr,sdslen(o->ptr));
-            c->reply_bytes += zmalloc_size_sds(tail->ptr);
+            tail->ptr = sdscatlen(tail->ptr,o->ptr,sdslen(o->ptr));//将o内容拼接到tail中
+            c->reply_bytes += zmalloc_size_sds(tail->ptr);//增加tail节点的字节数
 
         // 直接将对象追加到末尾
         } else {
             incrRefCount(o);
-            listAddNodeTail(c->reply,o);
+            listAddNodeTail(c->reply,o);//添加到reply尾部
             c->reply_bytes += getStringObjectSdsUsedMemory(o);
         }
     }
