@@ -407,30 +407,26 @@ void _addReplyStringToList(redisClient *c, char *s, size_t len) {
  * Higher level functions to queue data on the client output buffer.
  * The following functions are the ones that commands implementations will call.
  * -------------------------------------------------------------------------- */
-
+//添加对象obj到c的回复中。优先保存到buffer中，其次放入reply中（reply为空时才可以加入buffer中）
 void addReply(redisClient *c, robj *obj) {
-
-    // 为客户端安装写处理器到事件循环
+    // 为客户端安装写处理器到事件循环，添加c->fd的写时间监控到epoll实例中
     if (prepareClientToWrite(c) != REDIS_OK) return;
 
     /* This is an important place where we can avoid copy-on-write
      * when there is a saving child running, avoiding touching the
      * refcount field of the object if it's not needed.
-     *
      * 如果在使用子进程，那么尽可能地避免修改对象的 refcount 域。
-     *
      * If the encoding is RAW and there is room in the static buffer
      * we'll be able to send the object to the client without
      * messing with its page. 
-     *
      * 如果对象的编码为 RAW ，并且静态缓冲区中有空间
      * 那么就可以在不弄乱内存页的情况下，将对象发送给客户端。
      */
+    //如果obj是raw|embstr编码
     if (sdsEncodedObject(obj)) {
-        // 首先尝试复制内容到 c->buf 中，这样可以避免内存分配
+        //先尝试将obj放入c->buffer中（这样可以避免内存分配），如果不够的话，放入c->reply中
         if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != REDIS_OK)
-            // 如果 c->buf 中的空间不够，就复制到 c->reply 链表中
-            // 可能会引起内存分配
+            // 如果 c->buf 中的空间不够，就复制到 c->reply 链表中，可能会引起内存分配
             _addReplyObjectToList(c,obj);
     } else if (obj->encoding == REDIS_ENCODING_INT) {
         /* Optimization: if there is room in the static buffer for 32 bytes
@@ -438,20 +434,21 @@ void addReply(redisClient *c, robj *obj) {
          * avoid decoding the object and go for the lower level approach. */
         // 优化，如果 c->buf 中有等于或多于 32 个字节的空间
         // 那么将整数直接以字符串的形式复制到 c->buf 中
+        //如果reply是空的，并且buffer有32个字节的空间，那么将整数转换成字符串形式并加入buffer中
         if (listLength(c->reply) == 0 && (sizeof(c->buf) - c->bufpos) >= 32) {
             char buf[32];
             int len;
 
-            len = ll2string(buf,sizeof(buf),(long)obj->ptr);
-            if (_addReplyToBuffer(c,buf,len) == REDIS_OK)
+            len = ll2string(buf,sizeof(buf),(long)obj->ptr);//将整数转换成字符串形式
+            if (_addReplyToBuffer(c,buf,len) == REDIS_OK)//加入buffer中
                 return;
             /* else... continue with the normal code path, but should never
              * happen actually since we verified there is room. */
         }
         // 执行到这里，代表对象是整数，并且长度大于 32 位
-        // 将它转换为字符串
+        // 将它转换为字符串embstr|raw编码
         obj = getDecodedObject(obj);
-        // 保存到缓存中
+        // 先尝试保存到Buffer中，如果不行的话加入到reply中
         if (_addReplyToBuffer(c,obj->ptr,sdslen(obj->ptr)) != REDIS_OK)
             _addReplyObjectToList(c,obj);
         decrRefCount(obj);
@@ -461,31 +458,35 @@ void addReply(redisClient *c, robj *obj) {
 }
 
 /*
- * 将 SDS 中的内容复制到回复缓冲区
+ * 将 SDS 中的内容复制到回复缓冲区（优先buffer，其次reply的顺序）
  */
 void addReplySds(redisClient *c, sds s) {
+    //先为c->fd建立可写事件的监控，添加到epoll实例中
     if (prepareClientToWrite(c) != REDIS_OK) {
         /* The caller expects the sds to be free'd. */
         sdsfree(s);
         return;
     }
+    //先尝试添加到c->buffer中
     if (_addReplyToBuffer(c,s,sdslen(s)) == REDIS_OK) {
         sdsfree(s);
     } else {
         /* This method free's the sds when it is no longer needed. */
+        //不行的话，加入到c->reply中
         _addReplySdsToList(c,s);
     }
 }
 
 /*
- * 将 C 字符串中的内容复制到回复缓冲区
+ * 将 s[0...len-1]字符串中的内容复制到回复缓冲区，优先放入buffer，其次放入reply中
  */
 void addReplyString(redisClient *c, char *s, size_t len) {
+    //为c->fd建立可写事件的监控，添加到epoll实例中
     if (prepareClientToWrite(c) != REDIS_OK) return;
     if (_addReplyToBuffer(c,s,len) != REDIS_OK)
         _addReplyStringToList(c,s,len);
 }
-
+//将s[0..len-1]加入回复中，优先buffer，其次reply
 void addReplyErrorLength(redisClient *c, char *s, size_t len) {
     addReplyString(c,"-ERR ",5);
     addReplyString(c,s,len);
@@ -494,13 +495,12 @@ void addReplyErrorLength(redisClient *c, char *s, size_t len) {
 
 /*
  * 返回一个错误回复
- *
  * 例子 -ERR unknown command 'foobar'
  */
 void addReplyError(redisClient *c, char *err) {
     addReplyErrorLength(c,err,strlen(err));
 }
-
+//添加一个格式化字符串到回复中，优先buffer，其次reply
 void addReplyErrorFormat(redisClient *c, const char *fmt, ...) {
     size_t l, j;
     va_list ap;
@@ -516,7 +516,7 @@ void addReplyErrorFormat(redisClient *c, const char *fmt, ...) {
     addReplyErrorLength(c,s,sdslen(s));
     sdsfree(s);
 }
-
+//添加+s[0...len-1]\r\n到回复中，优先buffer，其次reply
 void addReplyStatusLength(redisClient *c, char *s, size_t len) {
     addReplyString(c,"+",1);
     addReplyString(c,s,len);
@@ -524,14 +524,13 @@ void addReplyStatusLength(redisClient *c, char *s, size_t len) {
 }
 
 /*
- * 返回一个状态回复
- *
+ * 返回一个状态回复，优先buffer，其次reply
  * 例子 +OK\r\n
  */
 void addReplyStatus(redisClient *c, char *status) {
     addReplyStatusLength(c,status,strlen(status));
 }
-
+//添加格式化status字符串到回复中，优先buffer，其次reply
 void addReplyStatusFormat(redisClient *c, const char *fmt, ...) {
     va_list ap;
     va_start(ap,fmt);
@@ -544,6 +543,7 @@ void addReplyStatusFormat(redisClient *c, const char *fmt, ...) {
 /* Adds an empty object to the reply list that will contain the multi bulk
  * length, which is not known when this function is called. */
 // 当发送 Multi Bulk 回复时，先创建一个空的链表，之后再用实际的回复填充它
+// 在reply的末尾添加一个空的链表节点
 void *addDeferredMultiBulkLength(redisClient *c) {
     /* Note that we install the write event here even if the object is not
      * ready to be sent, since we are sure that before returning to the
@@ -555,6 +555,7 @@ void *addDeferredMultiBulkLength(redisClient *c) {
 
 /* Populate the length object and try gluing it to the next chunk. */
 // 设置 Multi Bulk 回复的长度
+//将*length\r\n写入node节点，并尝试将node->next节点的内容拼接到当前节点中
 void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
     listNode *ln = (listNode*)node;
     robj *len, *next;
@@ -563,30 +564,28 @@ void setDeferredMultiBulkLength(redisClient *c, void *node, long length) {
     if (node == NULL) return;
 
     len = listNodeValue(ln);
-    len->ptr = sdscatprintf(sdsempty(),"*%ld\r\n",length);
+    len->ptr = sdscatprintf(sdsempty(),"*%ld\r\n",length);//以*length\r\n形式写入
     len->encoding = REDIS_ENCODING_RAW; /* in case it was an EMBSTR. */
     c->reply_bytes += zmalloc_size_sds(len->ptr);
+    //尝试将next节点的内容拼接到当前节点中
     if (ln->next != NULL) {
         next = listNodeValue(ln->next);
-
         /* Only glue when the next node is non-NULL (an sds in this case) */
         if (next->ptr != NULL) {
-            c->reply_bytes -= zmalloc_size_sds(len->ptr);
-            c->reply_bytes -= getStringObjectSdsUsedMemory(next);
-            len->ptr = sdscatlen(len->ptr,next->ptr,sdslen(next->ptr));
-            c->reply_bytes += zmalloc_size_sds(len->ptr);
-            listDelNode(c->reply,ln->next);
+            c->reply_bytes -= zmalloc_size_sds(len->ptr);//先减去当前节点的字节长度
+            c->reply_bytes -= getStringObjectSdsUsedMemory(next);//减去next节点的字节长度
+            len->ptr = sdscatlen(len->ptr,next->ptr,sdslen(next->ptr));//将next节点的字符串拼接到当前节点中
+            c->reply_bytes += zmalloc_size_sds(len->ptr);//增加当前节点的字节长度（因为上面的sdscatelen可能重新分配内存）
+            listDelNode(c->reply,ln->next);//删除next节点
         }
     }
     asyncCloseClientOnOutputBufferLimitReached(c);
 }
 
-/* Add a double as a bulk reply */
-/*
- * 以 bulk 回复的形式，返回一个双精度浮点数
- *
- * 例子 $4\r\n3.14\r\n
+/* Add a double as a bulk reply
+ * 以 bulk 回复的形式，返回一个双精度浮点数，例子 $4\r\n3.14\r\n
  */
+//以$长度\r\ndouble字符串\r\n形式添加到回复中，优先buffer，其次reply
 void addReplyDouble(redisClient *c, double d) {
     char dbuf[128], sbuf[128];
     int dlen, slen;
@@ -597,22 +596,17 @@ void addReplyDouble(redisClient *c, double d) {
     } else {
         dlen = snprintf(dbuf,sizeof(dbuf),"%.17g",d);
         slen = snprintf(sbuf,sizeof(sbuf),"$%d\r\n%s\r\n",dlen,dbuf);
+        //以$长度\r\ndouble字符串\r\n格式添加到回复中
         addReplyString(c,sbuf,slen);
     }
 }
 
 /* Add a long long as integer reply or bulk len / multi bulk count.
- * 
  * 添加一个 long long 为整数回复，或者 bulk 或 multi bulk 的数目
- *
  * Basically this is used to output <prefix><long long><crlf>. 
- *
  * 输出格式为 <prefix><long long><crlf>
- *
  * 例子:
- *
  * *5\r\n10086\r\n
- *
  * $5\r\n10086\r\n
  */
 void addReplyLongLongWithPrefix(redisClient *c, long long ll, char prefix) {
@@ -632,6 +626,7 @@ void addReplyLongLongWithPrefix(redisClient *c, long long ll, char prefix) {
         return;
     }
 
+    //以prefix len\r\n格式写入到回复中
     buf[0] = prefix;
     len = ll2string(buf+1,sizeof(buf)-1,ll);
     buf[len+1] = '\r';
@@ -641,7 +636,6 @@ void addReplyLongLongWithPrefix(redisClient *c, long long ll, char prefix) {
 
 /*
  * 返回一个整数回复
- * 
  * 格式为 :10086\r\n
  */
 void addReplyLongLong(redisClient *c, long long ll) {
@@ -652,7 +646,7 @@ void addReplyLongLong(redisClient *c, long long ll) {
     else
         addReplyLongLongWithPrefix(c,ll,':');
 }
-
+//返回一个整数回复，格式*length\r\n
 void addReplyMultiBulkLen(redisClient *c, long length) {
     if (length < REDIS_SHARED_BULKHDR_LEN)
         addReply(c,shared.mbulkhdr[length]);
@@ -661,6 +655,7 @@ void addReplyMultiBulkLen(redisClient *c, long length) {
 }
 
 /* Create the length prefix of a bulk reply, example: $2234 */
+//将obj字符串的长度（如果是int编码，看看转换成字符串后有多少字节）以格式"$长度\r\n"写入回复中
 void addReplyBulkLen(redisClient *c, robj *obj) {
     size_t len;
 
@@ -679,7 +674,7 @@ void addReplyBulkLen(redisClient *c, robj *obj) {
             len++;
         }
     }
-
+    //将长度以格式"$长度\r\n"添加到回复中
     if (len < REDIS_SHARED_BULKHDR_LEN)
         addReply(c,shared.bulkhdr[len]);
     else
@@ -687,8 +682,7 @@ void addReplyBulkLen(redisClient *c, robj *obj) {
 }
 
 /* Add a Redis Object as a bulk reply 
- *
- * 返回一个 Redis 对象作为回复
+ * 返回一个 Redis 对象作为回复。格式：$长度\r\n字符串内容\r\n
  */
 void addReplyBulk(redisClient *c, robj *obj) {
     addReplyBulkLen(c,obj);
@@ -697,8 +691,7 @@ void addReplyBulk(redisClient *c, robj *obj) {
 }
 
 /* Add a C buffer as bulk reply 
- *
- * 返回一个 C 缓冲区作为回复
+ * 返回一个 C 缓冲区作为回复。格式：$长度\r\n字符串内容\r\n
  */
 void addReplyBulkCBuffer(redisClient *c, void *p, size_t len) {
     addReplyLongLongWithPrefix(c,len,'$');
@@ -707,8 +700,7 @@ void addReplyBulkCBuffer(redisClient *c, void *p, size_t len) {
 }
 
 /* Add a C nul term string as bulk reply 
- *
- * 返回一个 C 字符串作为回复
+ * 返回一个 C 字符串作为回复。格式：$长度\r\n字符串内容\r\n
  */
 void addReplyBulkCString(redisClient *c, char *s) {
     if (s == NULL) {
@@ -719,8 +711,7 @@ void addReplyBulkCString(redisClient *c, char *s) {
 }
 
 /* Add a long long as a bulk reply 
- *
- * 返回一个 long long 值作为回复
+ * 返回一个 long long 值作为回复。例如返回1234，那么返回$4\r\n1234\r\n。
  */
 void addReplyBulkLongLong(redisClient *c, long long ll) {
     char buf[64];
