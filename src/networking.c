@@ -1032,7 +1032,7 @@ void freeClientsInAsyncFreeQueue(void) {
 }
 
 /*
- * 负责传送命令回复的写处理器
+ * 负责传送命令回复的写处理器，将buffer和reply回复给客户端（先写buffer，写完再写reply中内容）
  */
 void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *c = privdata;
@@ -1042,14 +1042,13 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    // 一直循环，直到回复缓冲区为空
-    // 或者指定条件满足为止
+    // 一直循环，直到回复缓冲区为空 或者指定条件满足为止
     while(c->bufpos > 0 || listLength(c->reply)) {
-
+        
+        //如果buffer内有内容
         if (c->bufpos > 0) {
 
             // c->bufpos > 0
-
             // 写入内容到套接字
             // c->sentlen 是用来处理 short write 的
             // 当出现 short write ，导致写入未能一次完成时，
@@ -1058,49 +1057,48 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
             // 出错则跳出
             if (nwritten <= 0) break;
             // 成功写入则更新写入计数器变量
-            c->sentlen += nwritten;
-            totwritten += nwritten;
+            c->sentlen += nwritten; //累加sentlen，更新buffer当前已写入量
+            totwritten += nwritten; //更新总的已写字节数
 
             /* If the buffer was sent, set bufpos to zero to continue with
              * the remainder of the reply. */
-            // 如果缓冲区中的内容已经全部写入完毕
-            // 那么清空客户端的两个计数器变量
+            // 如果buffer中的内容已经全部写入完毕，那么清空客户端的两个计数器变量
+            //sentlen是专门支持short write的
             if (c->sentlen == c->bufpos) {
                 c->bufpos = 0;
-                c->sentlen = 0;
+                c->sentlen = 0; //清空sentlen
             }
+            //如果没写完，会继续while循环，然后继续写入buffer，注意写完buffer后才会写reply内容
         } else {
-
-            // listLength(c->reply) != 0
-
+            // 走到这里说明listLength(c->reply) != 0，即reply链表里有内容
+            
             // 取出位于链表最前面的对象
             o = listNodeValue(listFirst(c->reply));
-            objlen = sdslen(o->ptr);
-            objmem = getStringObjectSdsUsedMemory(o);
+            objlen = sdslen(o->ptr);//len的字节数
+            objmem = getStringObjectSdsUsedMemory(o);//占用字节数，包括len+free的字节数
 
-            // 略过空对象
+            // 略过空对象：当前链表节点没有字节可写，跳过
             if (objlen == 0) {
-                listDelNode(c->reply,listFirst(c->reply));
-                c->reply_bytes -= objmem;
+                listDelNode(c->reply,listFirst(c->reply));//从链表中删除
+                c->reply_bytes -= objmem; //更新reply占用的字节数
                 continue;
             }
 
             // 写入内容到套接字
-            // c->sentlen 是用来处理 short write 的
-            // 当出现 short write ，导致写入未能一次完成时，
-            // c->buf+c->sentlen 就会偏移到正确（未写入）内容的位置上。
+            // c->sentlen 是用来处理 short write 的（每次写完buffer或写完reply的一个节点时，sentlen都清零）
+            // 当出现 short write ，导致写入未能一次完成时，c->buf+c->sentlen 就会偏移到正确（未写入）内容的位置上。
             nwritten = write(fd, ((char*)o->ptr)+c->sentlen,objlen-c->sentlen);
             // 写入出错则跳出
             if (nwritten <= 0) break;
             // 成功写入则更新写入计数器变量
-            c->sentlen += nwritten;
-            totwritten += nwritten;
+            c->sentlen += nwritten; //更新reply当前链表节点的写入量
+            totwritten += nwritten; //更新总的写入量
 
             /* If we fully sent the object on head go to the next one */
             // 如果缓冲区内容全部写入完毕，那么删除已写入完毕的节点
             if (c->sentlen == objlen) {
-                listDelNode(c->reply,listFirst(c->reply));
-                c->sentlen = 0;
+                listDelNode(c->reply,listFirst(c->reply)); //从链表中删除该节点
+                c->sentlen = 0;//清空sentlen
                 c->reply_bytes -= objmem;
             }
         }
@@ -1109,21 +1107,15 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
          * other clients as well, even if a very large request comes from
          * super fast link that is always able to accept data (in real world
          * scenario think about 'KEYS *' against the loopback interface).
-         *
-         * 为了避免一个非常大的回复独占服务器，
-         * 当写入的总数量大于 REDIS_MAX_WRITE_PER_EVENT ，
-         * 临时中断写入，将处理时间让给其他客户端，
-         * 剩余的内容等下次写入就绪再继续写入
-         *
+         * 为了避免一个非常大的回复独占服务器， 当写入的总数量大于 REDIS_MAX_WRITE_PER_EVENT ，
+         * 临时中断写入，将处理时间让给其他客户端，剩余的内容等下次写入就绪再继续写入
          * However if we are over the maxmemory limit we ignore that and
          * just deliver as much data as it is possible to deliver. 
-         *
-         * 不过，如果服务器的内存占用已经超过了限制，
-         * 那么为了将回复缓冲区中的内容尽快写入给客户端，
-         * 然后释放回复缓冲区的空间来回收内存，
-         * 这时即使写入量超过了 REDIS_MAX_WRITE_PER_EVENT ，
+         * 不过，如果服务器的内存占用已经超过了限制， 那么为了将回复缓冲区中的内容尽快写入给客户端，
+         * 然后释放回复缓冲区的空间来回收内存，这时即使写入量超过了 REDIS_MAX_WRITE_PER_EVENT ，
          * 程序也继续进行写入
          */
+        //如果当前使用内存没超过maxmemory 并且写入超过64k了，那么先不写了，下次有空再写。
         if (totwritten > REDIS_MAX_WRITE_PER_EVENT &&
             (server.maxmemory == 0 ||
              zmalloc_used_memory() < server.maxmemory)) break;
@@ -1146,12 +1138,14 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
          * as an interaction, since we always send REPLCONF ACK commands
          * that take some time to just fill the socket output buffer.
          * We just rely on data / pings received for timeout detection. */
+        //如果写入了一些字节，更新客户端最后一次和服务器互动的时间
         if (!(c->flags & REDIS_MASTER)) c->lastinteraction = server.unixtime;
     }
+    //如果buffer已写完，并且reply也写完了，那么不再监控fd的可写事件了（因为暂无数据可写）
     if (c->bufpos == 0 && listLength(c->reply) == 0) {
         c->sentlen = 0;
 
-        // 删除 write handler
+        // 删除 write handler，不再监控fd的可写事件了
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
 
         /* Close connection after entire reply has been sent. */
@@ -1165,7 +1159,7 @@ void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
 void resetClient(redisClient *c) {
     redisCommandProc *prevcmd = c->cmd ? c->cmd->proc : NULL;
 
-    freeClientArgv(c);
+    freeClientArgv(c); //释放客户端参数
     c->reqtype = 0;
     c->multibulklen = 0;
     c->bulklen = -1;
