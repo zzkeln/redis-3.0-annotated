@@ -739,12 +739,12 @@ void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
 }
 
 /*
- * TCP 连接 accept 处理器
+ * TCP 连接 accept 处理器：为fd创建redisClient，并将fd的可读事件监控添加到epoll中
  */
 #define MAX_ACCEPTS_PER_CALL 1000
 static void acceptCommonHandler(int fd, int flags) {
 
-    // 创建客户端
+    // 创建客户端，并通过epoll_ctl添加fd的可读事件到epoll中。createClient内部会设置fd为non-block模式
     redisClient *c;
     if ((c = createClient(fd)) == NULL) {
         redisLog(REDIS_WARNING,
@@ -765,6 +765,7 @@ static void acceptCommonHandler(int fd, int flags) {
         char *err = "-ERR max number of clients reached\r\n";
 
         /* That's a best effort error message, don't check write errors */
+        //写入错误信息给客户端
         if (write(c->fd,err,strlen(err)) == -1) {
             /* Nothing to do, Just to avoid the warning... */
         }
@@ -782,7 +783,7 @@ static void acceptCommonHandler(int fd, int flags) {
 }
 
 /* 
- * 创建一个 TCP 连接处理器
+ * 创建一个 TCP 连接处理器：accept一个fd，为fd创建redisClient并添加可读事件监控到epoll中
  */
 void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd, max = MAX_ACCEPTS_PER_CALL;
@@ -790,9 +791,9 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
-
+    //每次调用这个函数会最多accept 1000个fd
     while(max--) {
-        // accept 客户端连接
+        // accept 客户端连接，accept一个fd
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
@@ -801,13 +802,13 @@ void acceptTcpHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
         redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
-        // 为客户端创建客户端状态（redisClient）
+        // 为客户端cfd创建客户端状态（redisClient）
         acceptCommonHandler(cfd,0);
     }
 }
 
 /*
- * 创建一个本地连接处理器
+ * 创建一个本地连接处理器：accept一个fd，为fd创建redisClient并添加可读事件监控到epoll中
  */
 void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cfd, max = MAX_ACCEPTS_PER_CALL;
@@ -836,7 +837,7 @@ void acceptUnixHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 static void freeClientArgv(redisClient *c) {
     int j;
     for (j = 0; j < c->argc; j++)
-        decrRefCount(c->argv[j]);
+        decrRefCount(c->argv[j]); //对argv[j]对象减少引用计数
     c->argc = 0;
     c->cmd = NULL;
 }
@@ -846,6 +847,7 @@ static void freeClientArgv(redisClient *c) {
  * resync with us as well. */
 // 断开所有从服务器的连接，强制所有从服务器执行重同步
 void disconnectSlaves(void) {
+    //遍历slaves，释放每个redisClient
     while (listLength(server.slaves)) {
         listNode *ln = listFirst(server.slaves);
         freeClient((redisClient*)ln->value);
@@ -861,13 +863,10 @@ void replicationHandleMasterDisconnection(void) {
     server.repl_down_since = server.unixtime;
     /* We lost connection with our master, force our slaves to resync
      * with us as well to load the new data set.
-     *
      * 和主服务器失联，强制所有这个服务器的从服务器 resync ，
      * 等待载入新数据。
-     *
      * If server.masterhost is NULL the user called SLAVEOF NO ONE so
      * slave resync is not needed. 
-     *
      * 如果 masterhost 不存在（怎么会这样呢？）
      * 那么调用 SLAVEOF NO ONE ，避免 slave resync
      */
@@ -885,7 +884,6 @@ void freeClient(redisClient *c) {
 
     /* If it is our master that's beging disconnected we should make sure
      * to cache the state to try a partial resynchronization later.
-     *
      * Note that before doing this we make sure that the client is not in
      * some unexpected state, by checking its flags. */
     if (server.master && c->flags & REDIS_MASTER) {
@@ -911,6 +909,7 @@ void freeClient(redisClient *c) {
     }
 
     /* Free the query buffer */
+    //释放查询缓冲区
     sdsfree(c->querybuf);
     c->querybuf = NULL;
 
@@ -933,6 +932,7 @@ void freeClient(redisClient *c) {
     /* Close socket, unregister events, and remove list of replies and
      * accumulated arguments. */
     // 关闭套接字，并从事件处理器中删除该套接字的事件
+    // 从epoll中用epoll_del删除读和写事件
     if (c->fd != -1) {
         aeDeleteFileEvent(server.el,c->fd,AE_READABLE);
         aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
@@ -948,9 +948,9 @@ void freeClient(redisClient *c) {
     /* Remove from the list of clients */
     // 从服务器的客户端链表中删除自身
     if (c->fd != -1) {
-        ln = listSearchKey(server.clients,c);
+        ln = listSearchKey(server.clients,c); //先找链表节点
         redisAssert(ln != NULL);
-        listDelNode(server.clients,ln);
+        listDelNode(server.clients,ln);//然后从链表中删除
     }
 
     /* When client was just unblocked because of a blocking operation,
@@ -995,7 +995,7 @@ void freeClient(redisClient *c) {
 
     /* Release other dynamically allocated client structure fields,
      * and finally release the client structure itself. */
-    if (c->name) decrRefCount(c->name);
+    if (c->name) decrRefCount(c->name); //减少robj* name的引用计数
     // 清除参数空间
     zfree(c->argv);
     // 清除事务状态信息
@@ -1009,16 +1009,15 @@ void freeClient(redisClient *c) {
  * This function is useful when we need to terminate a client but we are in
  * a context where calling freeClient() is not possible, because the client
  * should be valid for the continuation of the flow of the program. */
-// 异步地释放给定的客户端
+// 异步地释放给定的客户端：添加client添加到server的clients_to_close中
 void freeClientAsync(redisClient *c) {
     if (c->flags & REDIS_CLOSE_ASAP) return;
     c->flags |= REDIS_CLOSE_ASAP;
     listAddNodeTail(server.clients_to_close,c);
 }
 
-// 关闭需要异步关闭的客户端
+// 关闭需要异步关闭的客户端：遍历server.clients_to_close，依次释放它们
 void freeClientsInAsyncFreeQueue(void) {
-    
     // 遍历所有要关闭的客户端
     while (listLength(server.clients_to_close)) {
         listNode *ln = listFirst(server.clients_to_close);
