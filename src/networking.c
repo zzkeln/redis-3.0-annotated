@@ -285,7 +285,8 @@ int _addReplyToBuffer(redisClient *c, char *s, size_t len) {
 }
 
 /*
- * 将回复对象（一个 SDS ）添加到 c->reply 回复链表中
+ * 将回复对象（一个 SDS ）添加到 c->reply 回复链表中（如果reply最后一个节点小于16k并且能放得下o那么拼接下，
+ 否则直接将o作为新的链表节点添加到reply的末尾）
  */
 void _addReplyObjectToList(redisClient *c, robj *o) {
     robj *tail;
@@ -336,8 +337,8 @@ void _addReplyObjectToList(redisClient *c, robj *o) {
  * needed it will be free'd, otherwise it ends up in a robj. */
 // 和 _addReplyObjectToList 类似，但会负责 SDS 的释放功能（如果需要的话）
 void _addReplySdsToList(redisClient *c, sds s) {
-    robj *tail;
-
+    robj *tail;    
+    // 客户端即将被关闭，无须再发送回复，直接释放sds
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) {
         sdsfree(s);
         return;
@@ -350,6 +351,7 @@ void _addReplySdsToList(redisClient *c, sds s) {
         tail = listNodeValue(listLast(c->reply));
 
         /* Append to this object when possible. */
+        //最后一个节点加上sds后，小于16k，那么直接将sds拼接到最后一个节点中
         if (tail->ptr != NULL && tail->encoding == REDIS_ENCODING_RAW &&
             sdslen(tail->ptr)+sdslen(s) <= REDIS_REPLY_CHUNK_BYTES)
         {
@@ -357,30 +359,31 @@ void _addReplySdsToList(redisClient *c, sds s) {
             tail = dupLastObjectIfNeeded(c->reply);
             tail->ptr = sdscatlen(tail->ptr,s,sdslen(s));
             c->reply_bytes += zmalloc_size_sds(tail->ptr);
-            sdsfree(s);
+            sdsfree(s); //释放s
         } else {
+            //否则创建一个字符串对象，并作为新节点加到reply链表的末尾
             listAddNodeTail(c->reply,createObject(REDIS_STRING,s));
             c->reply_bytes += zmalloc_size_sds(s);
         }
     }
     asyncCloseClientOnOutputBufferLimitReached(c);
 }
-
+//将s[0..len-1]添加到reply中
 void _addReplyStringToList(redisClient *c, char *s, size_t len) {
     robj *tail;
 
     if (c->flags & REDIS_CLOSE_AFTER_REPLY) return;
-
+    //reply链表是空的，为s创建字符串对象并添加到reply末尾
     if (listLength(c->reply) == 0) {
         // 为字符串创建字符串对象并追加到回复链表末尾
         robj *o = createStringObject(s,len);
-
         listAddNodeTail(c->reply,o);
         c->reply_bytes += getStringObjectSdsUsedMemory(o);
     } else {
-        tail = listNodeValue(listLast(c->reply));
+        tail = listNodeValue(listLast(c->reply)); //拿到reply的最后一个节点
 
         /* Append to this object when possible. */
+        //如果tail的字节数+len小于16k，那么将s[0..len]拼接到tail
         if (tail->ptr != NULL && tail->encoding == REDIS_ENCODING_RAW &&
             sdslen(tail->ptr)+len <= REDIS_REPLY_CHUNK_BYTES)
         {
@@ -390,7 +393,7 @@ void _addReplyStringToList(redisClient *c, char *s, size_t len) {
             tail->ptr = sdscatlen(tail->ptr,s,len);
             c->reply_bytes += zmalloc_size_sds(tail->ptr);
         } else {
-            // 为字符串创建字符串对象并追加到回复链表末尾
+            // 否则为字符串创建字符串对象并追加到回复链表末尾
             robj *o = createStringObject(s,len);
 
             listAddNodeTail(c->reply,o);
