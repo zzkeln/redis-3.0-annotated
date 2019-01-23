@@ -634,9 +634,8 @@ void addReplyLongLongWithPrefix(redisClient *c, long long ll, char prefix) {
     addReplyString(c,buf,len+3);
 }
 
-/*
- * 返回一个整数回复
- * 格式为 :10086\r\n
+/*返回一个整数回复
+ *格式为 :10086\r\n
  */
 void addReplyLongLong(redisClient *c, long long ll) {
     if (ll == 0)
@@ -724,15 +723,14 @@ void addReplyBulkLongLong(redisClient *c, long long ll) {
 /* Copy 'src' client output buffers into 'dst' client output buffers.
  * The function takes care of freeing the old output buffers of the
  * destination client. */
-// 释放 dst 客户端原有的输出内容，并将 src 客户端的输出内容复制给 dst
+//释放dst中的回复内容，将src的回复内容复制到dst中
 void copyClientOutputBuffer(redisClient *dst, redisClient *src) {
-
     // 释放 dst 原有的回复链表
     listRelease(dst->reply);
     // 复制新链表到 dst
-    dst->reply = listDup(src->reply);
+    dst->reply = listDup(src->reply);//其实2个链表节点通过引用计数会共享字符串对象
 
-    // 复制内容到回复 buf
+    // 复制buf内容到回复 buf，长度是bufpos
     memcpy(dst->buf,src->buf,src->bufpos);
 
     // 同步偏移量和字节数
