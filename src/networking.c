@@ -1990,7 +1990,6 @@ int checkClientOutputBufferLimits(redisClient *c) {
      * specified amount of seconds. */
     // 达到软性限制
     if (soft) {
-
         // 第一次达到软性限制
         if (c->obuf_soft_limit_reached_time == 0) {
             // 记录时间
@@ -2023,14 +2022,11 @@ int checkClientOutputBufferLimits(redisClient *c) {
 /* Asynchronously close a client if soft or hard limit is reached on the
  * output buffer size. The caller can check if the client will be closed
  * checking if the client REDIS_CLOSE_ASAP flag is set.
- *
  * 如果客户端达到缓冲区大小的软性或者硬性限制，那么打开客户端的 ``REDIS_CLOSE_ASAP`` 状态，
  * 让服务器异步地关闭客户端。
- *
  * Note: we need to close the client asynchronously because this function is
  * called from contexts where the client can't be freed safely, i.e. from the
  * lower level functions pushing data inside the client output buffers. 
- *
  * 注意：
  * 我们不能直接关闭客户端，而要异步关闭的原因是客户端正处于一个不能被安全地关闭的上下文中。
  * 比如说，可能有底层函数正在推入数据到客户端的输出缓冲区里面。      
@@ -2045,7 +2041,7 @@ void asyncCloseClientOnOutputBufferLimitReached(redisClient *c) {
     if (checkClientOutputBufferLimits(c)) {
         sds client = catClientInfoString(sdsempty(),c);
 
-        // 异步关闭
+        // 异步关闭：将client添加到server.clients_to_close链表中
         freeClientAsync(c);
         redisLog(REDIS_WARNING,"Client %s scheduled to be closed ASAP for overcoming of output buffer limits.", client);
         sdsfree(client);
@@ -2060,6 +2056,7 @@ void flushSlavesOutputBuffers(void) {
     listIter li;
     listNode *ln;
 
+    //遍历server.slaves
     listRewind(server.slaves,&li);
     while((ln = listNext(&li))) {
         redisClient *slave = listNodeValue(ln);
@@ -2095,7 +2092,6 @@ void flushSlavesOutputBuffers(void) {
 // 暂停客户端，让服务器在指定的时间内不再接受被暂停客户端发来的命令
 // 可以用于系统更新，并在内部由 CLUSTER FAILOVER 命令使用。
 void pauseClients(mstime_t end) {
-
     // 设置暂停时间
     if (!server.clients_paused || end > server.clients_pause_end_time)
         server.clients_pause_end_time = end;
