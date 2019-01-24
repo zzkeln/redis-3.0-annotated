@@ -1899,47 +1899,36 @@ void rewriteClientCommandArgument(redisClient *c, int i, robj *newval) {
  * using to store the reply still not read by the client.
  * It is "virtual" since the reply output list may contain objects that
  * are shared and are not really using additional memory.
- *
- * 函数返回客用于保存目前仍未返回给客户端的回复的虚拟大小（以字节为单位）。
- * 之所以说是虚拟大小，因为回复列表中可能有包含共享的对象。
- *
+ * 函数返回client用于保存目前仍未返回给客户端的回复的虚拟大小（以字节为单位）。
+ * 之所以说是虚拟大小，因为回复列表中可能有包含共享的对象（通过引用计数共享对象）。
  * The function returns the total sum of the length of all the objects
  * stored in the output list, plus the memory used to allocate every
  * list node. The static reply buffer is not taken into account since it
  * is allocated anyway.
- *
- * 函数返回回复列表中所包含的全部对象的体积总和，
- * 加上列表节点所分配的空间。
- * 静态回复缓冲区不会被计算在内，因为它总是会被分配的。
- *
+ * 函数返回回复列表中所包含的全部对象的体积总和，加上列表节点所分配的空间。
+ * 静态回复缓冲区不会被计算在内，因为它总是会被分配的。（就是16k的buffer总是被分配好的）
  * Note: this function is very fast so can be called as many time as
  * the caller wishes. The main usage of this function currently is
  * enforcing the client output length limits. 
- *
  * 注意：这个函数的速度很快，所以它可以被随意地调用多次。
  * 这个函数目前的主要作用就是用来强制客户端输出长度限制。
  */
 unsigned long getClientOutputBufferMemoryUsage(redisClient *c) {
-    unsigned long list_item_size = sizeof(listNode)+sizeof(robj);
+    unsigned long list_item_size = sizeof(listNode)+sizeof(robj);//reply中每个链表节点和对象占用的字节数
 
     return c->reply_bytes + (list_item_size*listLength(c->reply));
 }
 
 /* Get the class of a client, used in order to enforce limits to different
  * classes of clients.
- *
  * 获取客户端的类型，用于对不同类型的客户端应用不同的限制。
- *
  * The function will return one of the following:
- * 
  * 函数将返回以下三个值的其中一个：
  *
  * REDIS_CLIENT_LIMIT_CLASS_NORMAL -> Normal client
  *                                    普通客户端
- *
  * REDIS_CLIENT_LIMIT_CLASS_SLAVE  -> Slave or client executing MONITOR command
  *                                    从服务器，或者正在执行 MONITOR 命令的客户端
- *
  * REDIS_CLIENT_LIMIT_CLASS_PUBSUB -> Client subscribed to Pub/Sub channels
  *                                    正在进行订阅操作（SUBSCRIBE/PSUBSCRIBE）的客户端
  */
@@ -1971,13 +1960,10 @@ char *getClientLimitClassName(int class) {
 /* The function checks if the client reached output buffer soft or hard
  * limit, and also update the state needed to check the soft limit as
  * a side effect.
- *
  * 这个函数检查客户端是否达到了输出缓冲区的软性（soft）限制或者硬性（hard）限制，
  * 并在到达软限制时，对客户端进行标记。
- *
  * Return value: non-zero if the client reached the soft or the hard limit.
  *               Otherwise zero is returned. 
- *
  * 返回值：到达软性限制或者硬性限制时，返回非 0 值。
  *         否则返回 0 。
  */
