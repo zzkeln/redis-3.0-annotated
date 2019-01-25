@@ -53,125 +53,91 @@
 #include <locale.h>
 
 /* Our shared "common" objects */
-
+//共享对象
 struct sharedObjectsStruct shared;
 
 /* Global vars that are actually used as constants. The following double
  * values are used for double on-disk serialization, and are initialized
  * at runtime to avoid strange compiler optimizations. */
-
+//一些常量，0、正无穷、负无穷、nan
 double R_Zero, R_PosInf, R_NegInf, R_Nan;
 
 /*================================= Globals ================================= */
-
 /* Global vars */
-struct redisServer server; /* server global state */
+struct redisServer server; /* server global state */ //server服务器
 struct redisCommand *commandTable;
 
 /* Our command table.
- *
  * 命令表
- *
  * Every entry is composed of the following fields:
- *
  * 表中的每个项都由以下域组成：
- *
  * name: a string representing the command name.
  *       命令的名字
- *
  * function: pointer to the C function implementing the command.
  *           一个指向命令的实现函数的指针
- *
  * arity: number of arguments, it is possible to use -N to say >= N
  *        参数的数量。可以用 -N 表示 >= N 
- *
  * sflags: command flags as string. See below for a table of flags.
  *         字符串形式的 FLAG ，用来计算以下的真实 FLAG 
- *
  * flags: flags as bitmask. Computed by Redis using the 'sflags' field.
  *        位掩码形式的 FLAG ，根据 sflags 的字符串计算得出
- *
  * get_keys_proc: an optional function to get key arguments from a command.
  *                This is only used when the following three fields are not
  *                enough to specify what arguments are keys.
  *                一个可选的函数，用于从命令中取出 key 参数，仅在以下三个参数都不足以表示 key 参数时使用
- *
  * first_key_index: first argument that is a key
  *                  第一个 key 参数的位置
- *
  * last_key_index: last argument that is a key
  *                 最后一个 key 参数的位置
- *
  * key_step: step to get all the keys from first to last argument. For instance
  *           in MSET the step is two since arguments are key,val,key,val,...
  *           从 first 参数和 last 参数之间，所有 key 的步数（step）
  *           比如说， MSET 命令的格式为 MSET key value [key value ...]
  *           它的 step 就为 2
- *
  * microseconds: microseconds of total execution time for this command.
  *               执行这个命令耗费的总微秒数
- *
  * calls: total number of calls of this command.
  *        命令被执行的总次数
- *
  * The flags, microseconds and calls fields are computed by Redis and should
  * always be set to zero.
- *
  * microseconds 和 call 由 Redis 计算，总是初始化为 0 。
- *
  * Command flags are expressed using strings where every character represents
  * a flag. Later the populateCommandTable() function will take care of
  * populating the real 'flags' field using this characters.
- *
  * 命令的 FLAG 首先由 SFLAG 域设置，之后 populateCommandTable() 函数从 sflags 属性中计算出真正的 FLAG 到 flags 属性中。
- *
  * This is the meaning of the flags:
- *
  * 以下是各个 FLAG 的意义：
- *
  * w: write command (may modify the key space).
  *    写入命令，可能会修改 key space
- *
  * r: read command  (will never modify the key space).
  *    读命令，不修改 key space
  * m: may increase memory usage once called. Don't allow if out of memory.
  *    可能会占用大量内存的命令，调用时对内存占用进行检查
- *
  * a: admin command, like SAVE or SHUTDOWN.
  *    管理用途的命令，比如 SAVE 和 SHUTDOWN
- *
  * p: Pub/Sub related command.
  *    发布/订阅相关的命令
- *
  * f: force replication of this command, regardless of server.dirty.
  *    无视 server.dirty ，强制复制这个命令。
- *
  * s: command not allowed in scripts.
  *    不允许在脚本中使用的命令
- *
  * R: random command. Command is not deterministic, that is, the same command
  *    with the same arguments, with the same key space, may have different
  *    results. For instance SPOP and RANDOMKEY are two random commands.
- *    随机命令。
- *    命令是非确定性的：对于同样的命令，同样的参数，同样的键，结果可能不同。
+ *    随机命令。命令是非确定性的：对于同样的命令，同样的参数，同样的键，结果可能不同。
  *    比如 SPOP 和 RANDOMKEY 就是这样的例子。
- *
  * S: Sort command output array if called from script, so that the output
  *    is deterministic.
  *    如果命令在 Lua 脚本中执行，那么对输出进行排序，从而得出确定性的输出。
- *
  * l: Allow command while loading the database.
  *    允许在载入数据库时使用的命令。
- *
  * t: Allow command while a slave has stale data but is not allowed to
  *    server this data. Normally no command is accepted in this condition
  *    but just a few.
  *    允许在附属节点带有过期数据时执行的命令。
  *    这类命令很少有，只有几个。
- *
  * M: Do not automatically propagate the command on MONITOR.
  *    不要在 MONITOR 模式下自动广播的命令。
- *
  * k: Perform an implicit ASKING for this command, so the command will be
  *    accepted in cluster mode if the slot is marked as 'importing'.
  *    为这个命令执行一个显式的 ASKING ，
@@ -346,6 +312,7 @@ struct evictionPoolEntry *evictionPoolAlloc(void);
 
 /* Low level logging. To use only for very big messages, otherwise
  * redisLog() is to prefer. */
+//将进程号、时间戳、msg写入server.logfile中（调用fflush将用户缓存刷新到内核缓存中）
 void redisLogRaw(int level, const char *msg) {
     const int syslogLevelMap[] = { LOG_DEBUG, LOG_INFO, LOG_NOTICE, LOG_WARNING };
     const char *c = ".-*#";
@@ -357,8 +324,9 @@ void redisLogRaw(int level, const char *msg) {
     level &= 0xff; /* clear flags */
     if (level < server.verbosity) return;
 
+    //logfile不为空的话，打开logfile，如果为空那么输出到stdout
     fp = log_to_stdout ? stdout : fopen(server.logfile,"a");
-    if (!fp) return;
+    if (!fp) return;//打开失败直接返回
 
     if (rawmode) {
         fprintf(fp,"%s",msg);
@@ -367,19 +335,21 @@ void redisLogRaw(int level, const char *msg) {
         struct timeval tv;
 
         gettimeofday(&tv,NULL);
-        off = strftime(buf,sizeof(buf),"%d %b %H:%M:%S.",localtime(&tv.tv_sec));
+        off = strftime(buf,sizeof(buf),"%d %b %H:%M:%S.",localtime(&tv.tv_sec));//获得当前时间戳放入buf
         snprintf(buf+off,sizeof(buf)-off,"%03d",(int)tv.tv_usec/1000);
+        //写入进程号、时间戳、msg
         fprintf(fp,"[%d] %s %c %s\n",(int)getpid(),buf,c[level],msg);
     }
-    fflush(fp);
+    fflush(fp);//将内容从用户缓存刷新到内核缓存
 
-    if (!log_to_stdout) fclose(fp);
+    if (!log_to_stdout) fclose(fp);//关闭日志文件句柄
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 }
 
 /* Like redisLogRaw() but with printf-alike support. This is the function that
  * is used across the code. The raw version is only used in order to dump
  * the INFO output on crash. */
+//按照printf风格将日志写入server.logfile中（进程号、时间戳、msg）
 void redisLog(int level, const char *fmt, ...) {
     va_list ap;
     char msg[REDIS_MAX_LOGMSG_LEN];
