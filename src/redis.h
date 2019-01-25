@@ -682,7 +682,7 @@ struct saveparam {
     int changes;
 };
 
-// 通过复用来减少内存碎片，以及减少操作耗时的共享对象
+// 通过复用来减少内存碎片，以及减少操作耗时的共享对象。提前创建好的对象
 struct sharedObjectsStruct {
     robj *crlf, *ok, *err, *emptybulk, *czero, *cone, *cnegone, *pong, *space,
     *colon, *nullbulk, *nullmultibulk, *queued,
@@ -698,27 +698,24 @@ struct sharedObjectsStruct {
     *bulkhdr[REDIS_SHARED_BULKHDR_LEN];  /* "$<value>\r\n" */
 };
 
-/* ZSETs use a specialized version of Skiplists */
-/*
+/* ZSETs use a specialized version of Skiplists 
  * 跳跃表节点
  */
 typedef struct zskiplistNode {
-
     // 成员对象
     robj *obj;
 
     // 分值
     double score;
 
-    // 后退指针
+    // 后退指针，用于在第0层从后向前遍历
     struct zskiplistNode *backward;
 
     // 层
     struct zskiplistLevel {
-
         // 前进指针
         struct zskiplistNode *forward;
-
+      
         // 跨度
         unsigned int span;
 
@@ -730,7 +727,6 @@ typedef struct zskiplistNode {
  * 跳跃表
  */
 typedef struct zskiplist {
-
     // 表头节点和表尾节点
     struct zskiplistNode *header, *tail;
 
@@ -739,23 +735,19 @@ typedef struct zskiplist {
 
     // 表中层数最大的节点的层数
     int level;
-
 } zskiplist;
 
 /*
- * 有序集合
+ * 有序集合，包括skiplist和dict
  */
 typedef struct zset {
-
     // 字典，键为成员，值为分值
     // 用于支持 O(1) 复杂度的按成员取分值操作
     dict *dict;
 
     // 跳跃表，按分值排序成员
-    // 用于支持平均复杂度为 O(log N) 的按分值定位成员操作
-    // 以及范围操作
+    // 用于支持平均复杂度为 O(log N) 的按分值定位成员操作以及范围操作
     zskiplist *zsl;
-
 } zset;
 
 // 客户端缓冲区限制
@@ -774,17 +766,13 @@ extern clientBufferLimitsConfig clientBufferLimitsDefaults[REDIS_CLIENT_LIMIT_NU
 /* The redisOp structure defines a Redis Operation, that is an instance of
  * a command with an argument vector, database ID, propagation target
  * (REDIS_PROPAGATE_*), and command pointer.
- *
  * redisOp 结构定义了一个 Redis 操作，
  * 它包含指向被执行命令的指针、命令的参数、数据库 ID 、传播目标（REDIS_PROPAGATE_*）。
- *
  * Currently only used to additionally propagate more commands to AOF/Replication
  * after the propagation of the executed command. 
- *
  * 目前只用于在传播被执行命令之后，传播附加的其他命令到 AOF 或 Replication 中。
  */
 typedef struct redisOp {
-
     // 参数
     robj **argv;
 
@@ -793,12 +781,10 @@ typedef struct redisOp {
 
     // 被执行命令的指针
     struct redisCommand *cmd;
-
 } redisOp;
 
 /* Defines an array of Redis operations. There is an API to add to this
  * structure in a easy way.
- *
  * redisOpArrayInit();
  * redisOpArrayAppend();
  * redisOpArrayFree();
@@ -811,11 +797,10 @@ typedef struct redisOpArray {
 /*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
-
 struct clusterState;
 
+//服务器数据
 struct redisServer {
-
     /* General */
 
     // 配置文件的绝对路径
@@ -824,7 +809,7 @@ struct redisServer {
     // serverCron() 每秒调用的次数
     int hz;                     /* serverCron() calls frequency in hertz */
 
-    // 数据库
+    // 数据库，指向哪个db 
     redisDb *db;
 
     // 命令表（受到 rename 配置选项的作用）
@@ -832,7 +817,7 @@ struct redisServer {
     // 命令表（无 rename 配置选项的作用）
     dict *orig_commands;        /* Command table before command renaming. */
 
-    // 事件状态
+    // 事件状态，通过这个eventloop来处理各个命令
     aeEventLoop *el;
 
     // 最近一次使用时钟
@@ -863,8 +848,7 @@ struct redisServer {
     int sentinel_mode;          /* True if this instance is a Sentinel. */
 
 
-    /* Networking */
-
+    /* Networking */ //网络相关
     // TCP 监听端口
     int port;                   /* TCP listening port */
 
@@ -890,7 +874,7 @@ struct redisServer {
     int cfd[REDIS_BINDADDR_MAX];/* Cluster bus listening socket */
     int cfd_count;              /* Used slots in cfd[] */
 
-    // 一个链表，保存了所有客户端状态结构
+    // 一个链表，保存了所有客户端状态结构，每个客户端对应redisClient*
     list *clients;              /* List of active clients */
     // 链表，保存了所有待关闭的客户端
     list *clients_to_close;     /* Clients to close asynchronously */
@@ -911,8 +895,7 @@ struct redisServer {
     dict *migrate_cached_sockets;/* MIGRATE cached sockets */
 
 
-    /* RDB / AOF loading information */
-
+    /* RDB / AOF loading information */ //rdb aof文件相关
     // 这个值为真时，表示服务器正在进行载入
     int loading;                /* We are loading data from disk if true */
 
@@ -933,7 +916,6 @@ struct redisServer {
 
 
     /* Fields used only for stats */
-
     // 服务器启动时间
     time_t stat_starttime;          /* Server start time */
 
@@ -975,7 +957,6 @@ struct redisServer {
 
 
     /* slowlog */
-
     // 保存了所有慢查询日志的链表
     list *slowlog;                  /* SLOWLOG list of commands */
 
@@ -1001,7 +982,6 @@ struct redisServer {
 
 
     /* Configuration */
-
     // 日志可见性
     int verbosity;                  /* Loglevel in redis.conf */
 
@@ -1021,7 +1001,6 @@ struct redisServer {
 
 
     /* AOF persistence */
-
     // AOF 状态（开启/关闭/可写）
     int aof_state;                  /* REDIS_AOF_(ON|OFF|WAIT_REWRITE) */
 
@@ -1042,10 +1021,10 @@ struct redisServer {
     // 负责进行 AOF 重写的子进程 ID
     pid_t aof_child_pid;            /* PID if rewriting process */
 
-    // AOF 重写缓存链表，链接着多个缓存块
+    // AOF 重写缓存链表，链接着多个缓存块。aof重写期间，父进程接受到的写命令，缓存在这里
     list *aof_rewrite_buf_blocks;   /* Hold changes during an AOF rewrite. */
 
-    // AOF 缓冲区
+    // AOF 缓冲区，写命令存放的地方
     sds aof_buf;      /* AOF buffer, written before entering the event loop */
 
     // AOF 文件的描述符
@@ -1107,17 +1086,14 @@ struct redisServer {
     int lastbgsave_status;          /* REDIS_OK or REDIS_ERR */
     int stop_writes_on_bgsave_err;  /* Don't allow writes if can't BGSAVE */
 
-
     /* Propagation of commands in AOF / replication */
     redisOpArray also_propagate;    /* Additional command to propagate. */
-
 
     /* Logging */
     char *logfile;                  /* Path of log file */
     int syslog_enabled;             /* Is syslog enabled? */
     char *syslog_ident;             /* Syslog ident */
     int syslog_facility;            /* Syslog facility */
-
 
     /* Replication (master) */
     int slaveseldb;                 /* Last SELECTed DB in replication output */
@@ -1198,7 +1174,6 @@ struct redisServer {
     // 初始化偏移量
     long long repl_master_initial_offset;         /* Master PSYNC offset. */
 
-
     /* Replication script cache. */
     // 复制脚本缓存
     // 字典
@@ -1217,12 +1192,10 @@ struct redisServer {
     int maxmemory_policy;           /* Policy for key eviction */
     int maxmemory_samples;          /* Pricision of random sampling */
 
-
     /* Blocked clients */
     unsigned int bpop_blocked_clients; /* Number of clients blocked by lists */
     list *unblocked_clients; /* list of clients to unblock before next loop */
     list *ready_keys;        /* List of readyList structures for BLPOP & co */
-
 
     /* Sort parameters - qsort_r() is only available under BSD so we
      * have to take this state global, in order to pass it to sortCompare() */
@@ -1230,7 +1203,6 @@ struct redisServer {
     int sort_alpha;
     int sort_bypattern;
     int sort_store;
-
 
     /* Zip structure config, see redis.conf for more information  */
     size_t hash_max_ziplist_entries;
@@ -1243,7 +1215,6 @@ struct redisServer {
     size_t hll_sparse_max_bytes;
     time_t unixtime;        /* Unix time sampled every cron cycle. */
     long long mstime;       /* Like 'unixtime' but with milliseconds resolution. */
-
 
     /* Pubsub */
     // 字典，键为频道，值为链表
@@ -1259,7 +1230,6 @@ struct redisServer {
 
 
     /* Cluster */
-
     int cluster_enabled;      /* Is cluster enabled? */
     mstime_t cluster_node_timeout; /* Cluster node timeout. */
     char *cluster_configfile; /* Cluster auto-generated config file name. */
@@ -1301,7 +1271,6 @@ struct redisServer {
 
 
     /* Assert & bug reporting */
-
     char *assert_failed;
     char *assert_file;
     int assert_line;
@@ -1313,13 +1282,11 @@ struct redisServer {
  * 记录订阅模式的结构
  */
 typedef struct pubsubPattern {
-
     // 订阅模式的客户端
     redisClient *client;
 
     // 被订阅的模式
     robj *pattern;
-
 } pubsubPattern;
 
 typedef void redisCommandProc(redisClient *c);
