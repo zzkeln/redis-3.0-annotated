@@ -369,6 +369,7 @@ void redisLog(int level, const char *fmt, ...) {
  * We actually use this only for signals that are not fatal from the point
  * of view of Redis. Signals that are going to kill the server anyway and
  * where we need printf-alike features are served by redisLog(). */
+//调用write写入server.logfile，这个函数主要在信号处理函数中调用
 void redisLogFromHandler(int level, const char *msg) {
     int fd;
     int log_to_stdout = server.logfile[0] == '\0';
@@ -376,10 +377,11 @@ void redisLogFromHandler(int level, const char *msg) {
 
     if ((level&0xff) < server.verbosity || (log_to_stdout && server.daemonize))
         return;
+    //打开srever.logfile
     fd = log_to_stdout ? STDOUT_FILENO : 
                          open(server.logfile, O_APPEND|O_CREAT|O_WRONLY, 0644);
     if (fd == -1) return;
-    ll2string(buf,sizeof(buf),getpid());
+    ll2string(buf,sizeof(buf),getpid());//进程号写入buf中
     if (write(fd,"[",1) == -1) goto err;
     if (write(fd,buf,strlen(buf)) == -1) goto err;
     if (write(fd," | signal handler] (",20) == -1) goto err;
@@ -393,15 +395,15 @@ err:
 }
 
 /* Return the UNIX time in microseconds */
-// 返回微秒格式的 UNIX 时间
+// 返回微秒格式的 UNIX 时间：获得秒，乘以1000 000
 // 1 秒 = 1 000 000 微秒
 long long ustime(void) {
     struct timeval tv;
     long long ust;
 
     gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec)*1000000;
-    ust += tv.tv_usec;
+    ust = ((long long)tv.tv_sec)*1000000; //将秒转换成us
+    ust += tv.tv_usec; //累加us
     return ust;
 }
 
@@ -416,6 +418,8 @@ long long mstime(void) {
  * exit(), because the latter may interact with the same file objects used by
  * the parent process. However if we are testing the coverage normal exit() is
  * used in order to obtain the right coverage information. */
+//子进程完成rdb或aof文件后，挂掉自己的是使用_exit(retcode)。
+//注意：不用exit，是exit()可能会释放一些和父进程公用的数据结构。
 void exitFromChild(int retcode) {
 #ifdef COVERAGE_TEST
     exit(retcode);
@@ -425,23 +429,22 @@ void exitFromChild(int retcode) {
 }
 
 /*====================== Hash table type implementation  ==================== */
-
 /* This is a hash table type that uses the SDS dynamic strings library as
  * keys and radis objects as values (objects can hold SDS strings,
  * lists, sets). */
-
+//没有任何地方调用这个函数？
 void dictVanillaFree(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     zfree(val);
 }
-
+//字典，值是链表，这是释放节点的函数（就是释放链表）
 void dictListDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
     listRelease((list*)val);
 }
-
+//判断字典的键是否相等的函数，使用memcpy比较2个sds
 int dictSdsKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
@@ -456,6 +459,7 @@ int dictSdsKeyCompare(void *privdata, const void *key1,
 
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
+//比较2个字符串是否相等，case-intensive
 int dictSdsKeyCaseCompare(void *privdata, const void *key1,
         const void *key2)
 {
@@ -463,7 +467,7 @@ int dictSdsKeyCaseCompare(void *privdata, const void *key1,
 
     return strcasecmp(key1, key2) == 0;
 }
-
+//对象释放函数，就是将引用计数减1
 void dictRedisObjectDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
@@ -471,30 +475,30 @@ void dictRedisObjectDestructor(void *privdata, void *val)
     if (val == NULL) return; /* Values of swapped out keys as set to NULL */
     decrRefCount(val);
 }
-
+//字典键sds的释放函数
 void dictSdsDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
 
     sdsfree(val);
 }
-
+//比较2个字符串对象是否相等
 int dictObjKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
     const robj *o1 = key1, *o2 = key2;
     return dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
 }
-
+//使用murmurhash来计算哈希值
 unsigned int dictObjHash(const void *key) {
     const robj *o = key;
     return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
 }
-
+//计算sds key的哈希值
 unsigned int dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
 }
-
+//忽略大小写，计算sds key的哈希值
 unsigned int dictSdsCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char*)key, sdslen((char*)key));
 }
