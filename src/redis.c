@@ -489,7 +489,7 @@ int dictObjKeyCompare(void *privdata, const void *key1,
     const robj *o1 = key1, *o2 = key2;
     return dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
 }
-//使用murmurhash来计算哈希值
+//使用murmurhash来计算字符串对象key的哈希值
 unsigned int dictObjHash(const void *key) {
     const robj *o = key;
     return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
@@ -502,38 +502,40 @@ unsigned int dictSdsHash(const void *key) {
 unsigned int dictSdsCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char*)key, sdslen((char*)key));
 }
-
+//比较2个字符串对象key1、key2是否相同（比较整数或memcpy比较二进制数据）
 int dictEncObjKeyCompare(void *privdata, const void *key1,
         const void *key2)
 {
     robj *o1 = (robj*) key1, *o2 = (robj*) key2;
     int cmp;
-
+    //如果都是int编码，直接比较2个整数是否相等
     if (o1->encoding == REDIS_ENCODING_INT &&
         o2->encoding == REDIS_ENCODING_INT)
             return o1->ptr == o2->ptr;
 
-    o1 = getDecodedObject(o1);
-    o2 = getDecodedObject(o2);
-    cmp = dictSdsKeyCompare(privdata,o1->ptr,o2->ptr);
+    o1 = getDecodedObject(o1); //将int转换成embstr|raw编码
+    o2 = getDecodedObject(o2); //将int转换成embstr|raw编码
+    cmp = dictSdsKeyCompare(privdata,o1->ptr,o2->ptr); //用memcpy比较2个二进制数据是否相等
     decrRefCount(o1);
     decrRefCount(o2);
     return cmp;
 }
-
+//计算key的哈希值
 unsigned int dictEncObjHash(const void *key) {
     robj *o = (robj*) key;
-
+    //如果是embstr|raw编码，计算哈希值
     if (sdsEncodedObject(o)) {
         return dictGenHashFunction(o->ptr, sdslen((sds)o->ptr));
     } else {
+        //如果是int编码
         if (o->encoding == REDIS_ENCODING_INT) {
             char buf[32];
             int len;
-
+            //将整数转换成字符串形式，然后计算哈希值
             len = ll2string(buf,32,(long)o->ptr);
             return dictGenHashFunction((unsigned char*)buf, len);
         } else {
+            //todo：感觉这里的else路径肯定走不到？？？
             unsigned int hash;
 
             o = getDecodedObject(o);
