@@ -556,7 +556,7 @@ typedef struct redisClient {
     // 套接字描述符，伪客户端是-1
     int fd;
 
-    // 当前正在使用的数据库
+    // 当前正在使用的数据库，指向server.db
     redisDb *db;
 
     // 当前正在使用的数据库的 id （号码）
@@ -574,7 +574,7 @@ typedef struct redisClient {
     // 参数数量
     int argc;
 
-    // 参数对象数组
+    // 参数对象数组：argv[0...argc]是由querybuf中解析而来的
     robj **argv;
 
     // 记录被客户端执行的命令
@@ -595,7 +595,7 @@ typedef struct redisClient {
     // 回复链表中对象的总大小
     unsigned long reply_bytes; /* Tot bytes of objects in reply list */
 
-    // 已发送字节，处理 short write 用
+    // 已发送字节，处理 short write 用，每次写完buffer或reply中一个节点就清零
     int sentlen;            /* Amount of bytes already sent in the current
                                buffer or object being sent. */
 
@@ -663,25 +663,23 @@ typedef struct redisClient {
     // 记录了所有订阅频道的客户端的信息
     // 新 pubsubPattern 结构总是被添加到表尾
     list *pubsub_patterns;  /* patterns a client is interested in (SUBSCRIBE) */
-    sds peerid;             /* Cached peer ID. */
+    sds peerid;             /* Cached peer ID. *///客户端的名字,ip:port
 
     /* Response buffer */
     // 回复偏移量
     int bufpos;
-    // 回复缓冲区
+    // 回复缓冲区，16K
     char buf[REDIS_REPLY_CHUNK_BYTES];
 
 } redisClient;
 
 // 服务器的保存条件（BGSAVE 自动执行的条件）
 struct saveparam {
-
     // 多少秒之内
     time_t seconds;
 
     // 发生多少次修改
     int changes;
-
 };
 
 // 通过复用来减少内存碎片，以及减少操作耗时的共享对象
