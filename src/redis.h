@@ -139,8 +139,7 @@
 #define REDIS_INLINE_MAX_SIZE   (1024*64) /* Max size of inline reads */
 #define REDIS_MBULK_BIG_ARG     (1024*32)
 #define REDIS_LONGSTR_SIZE      21          /* Bytes needed for long -> str */
-// 指示 AOF 程序每累积这个量的写入数据
-// 就执行一次显式的 fsync
+// 指示 AOF 程序每累积这个量的写入数据，就执行一次显式的 fsync：32M
 #define REDIS_AOF_AUTOSYNC_BYTES (1024*1024*32) /* fdatasync every 32MB */
 /* When configuring the Redis eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS + FDSET_INCR
@@ -168,7 +167,7 @@
 #define REDIS_CMD_ASKING 4096               /* "k" flag */
 
 /* Object types */
-// 对象类型
+// 对象类型，共5种对象：字符串、列表、哈希、集合、有序集合
 #define REDIS_STRING 0
 #define REDIS_LIST 1
 #define REDIS_SET 2
@@ -179,15 +178,15 @@
  * internally represented in multiple ways. The 'encoding' field of the object
  * is set to one of this fields for this object. */
 // 对象编码
-#define REDIS_ENCODING_RAW 0     /* Raw representation */
-#define REDIS_ENCODING_INT 1     /* Encoded as integer */
-#define REDIS_ENCODING_HT 2      /* Encoded as hash table */
+#define REDIS_ENCODING_RAW 0     /* Raw representation */ //字符串对象
+#define REDIS_ENCODING_INT 1     /* Encoded as integer */ //字符串对象
+#define REDIS_ENCODING_HT 2      /* Encoded as hash table *///哈希对象
 #define REDIS_ENCODING_ZIPMAP 3  /* Encoded as zipmap */
-#define REDIS_ENCODING_LINKEDLIST 4 /* Encoded as regular linked list */
-#define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */
-#define REDIS_ENCODING_INTSET 6  /* Encoded as intset */
-#define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist */
-#define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding */
+#define REDIS_ENCODING_LINKEDLIST 4 /* Encoded as regular linked list */ //列表对象
+#define REDIS_ENCODING_ZIPLIST 5 /* Encoded as ziplist */ //集合、哈希、有序集合
+#define REDIS_ENCODING_INTSET 6  /* Encoded as intset *///集合对象
+#define REDIS_ENCODING_SKIPLIST 7  /* Encoded as skiplist *///有序集合
+#define REDIS_ENCODING_EMBSTR 8  /* Embedded sds string encoding *///字符串对象
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
@@ -202,19 +201,19 @@
  *
  * Lengths up to 63 are stored using a single byte, most DB keys, and may
  * values, will fit inside. */
-#define REDIS_RDB_6BITLEN 0
-#define REDIS_RDB_14BITLEN 1
-#define REDIS_RDB_32BITLEN 2
-#define REDIS_RDB_ENCVAL 3
+#define REDIS_RDB_6BITLEN 0  //00：后面跟着6位的整数
+#define REDIS_RDB_14BITLEN 1 //01：后面跟着14位的整数
+#define REDIS_RDB_32BITLEN 2 //10：后面跟着32位的整数
+#define REDIS_RDB_ENCVAL 3   //11：后面跟着特殊编码，后6位的值决定如何编码
 #define REDIS_RDB_LENERR UINT_MAX
 
 /* When a length of a string object stored on disk has the first two bits
- * set, the remaining two bits specify a special encoding for the object
+ * set 11, the remaining two bits specify a special encoding for the object
  * accordingly to the following defines: */
-#define REDIS_RDB_ENC_INT8 0        /* 8 bit signed integer */
-#define REDIS_RDB_ENC_INT16 1       /* 16 bit signed integer */
-#define REDIS_RDB_ENC_INT32 2       /* 32 bit signed integer */
-#define REDIS_RDB_ENC_LZF 3         /* string compressed with FASTLZ */
+#define REDIS_RDB_ENC_INT8 0        /* 8 bit signed integer */ //11xxxxxx：后面跟着1字节的int8_t
+#define REDIS_RDB_ENC_INT16 1       /* 16 bit signed integer *///11xxxxxx：后面跟着2字节的int16_t
+#define REDIS_RDB_ENC_INT32 2       /* 32 bit signed integer *///11xxxxxx：后面跟着4字节的int32_t
+#define REDIS_RDB_ENC_LZF 3         /* string compressed with FASTLZ *///11xxxxxx：后面跟着lzf字符串
 
 /* AOF states */
 #define REDIS_AOF_OFF 0             /* AOF is off */
@@ -280,6 +279,7 @@
 #define REDIS_REPL_SYNCIO_TIMEOUT 5
 
 /* List related stuff */
+//链表从头到尾，或从尾到头，指迭代链表的方向，用于迭代器
 #define REDIS_HEAD 0
 #define REDIS_TAIL 1
 
