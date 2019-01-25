@@ -307,9 +307,10 @@
 #define AOF_FSYNC_NO 0
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
-#define REDIS_DEFAULT_AOF_FSYNC AOF_FSYNC_EVERYSEC
+#define REDIS_DEFAULT_AOF_FSYNC AOF_FSYNC_EVERYSEC //默认是每s同步一次
 
 /* Zip structure related defaults */
+//最大字符串长度都是64字节，haxh、list、set的最大个数都是512个，zset是128个
 #define REDIS_HASH_MAX_ZIPLIST_ENTRIES 512
 #define REDIS_HASH_MAX_ZIPLIST_VALUE 64
 #define REDIS_LIST_MAX_ZIPLIST_ENTRIES 512
@@ -339,6 +340,7 @@
 #define REDIS_LUA_TIME_LIMIT 5000 /* milliseconds */
 
 /* Units */
+//秒或毫秒为单位
 #define UNIT_SECONDS 0
 #define UNIT_MILLISECONDS 1
 
@@ -379,6 +381,7 @@
 #define run_with_period(_ms_) if ((_ms_ <= 1000/server.hz) || !(server.cronloops%((_ms_)/(1000/server.hz))))
 
 /* We can print the stacktrace, so our assert is defined this way: */
+//e非0则ok，否则打印日志并挂掉进程
 #define redisAssertWithInfo(_c,_o,_e) ((_e)?(void)0 : (_redisAssertWithInfo(_c,_o,#_e,__FILE__,__LINE__),_exit(1)))
 #define redisAssert(_e) ((_e)?(void)0 : (_redisAssert(#_e,__FILE__,__LINE__),_exit(1)))
 #define redisPanic(_e) _redisPanic(#_e,__FILE__,__LINE__),_exit(1)
@@ -386,20 +389,17 @@
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
-
+//毫秒时间类型是long long
 typedef long long mstime_t; /* millisecond time type. */
 
-/* A redis object, that is a type able to hold a string / list / set */
-
-/* The actual Redis Object */
-/*
+/* A redis object, that is a type able to hold a string / list / set / hash / zset */
+/* The actual Redis Object 
  * Redis 对象
  */
 #define REDIS_LRU_BITS 24
 #define REDIS_LRU_CLOCK_MAX ((1<<REDIS_LRU_BITS)-1) /* Max value of obj->lru */
 #define REDIS_LRU_CLOCK_RESOLUTION 1000 /* LRU clock resolution in ms */
 typedef struct redisObject {
-
     // 哪种对象类型，共5种类型（字符串对象、列表对象、哈希对象、集合对象、有序集合对象）
     unsigned type:4;
 
@@ -409,7 +409,7 @@ typedef struct redisObject {
     // 对象最后一次被访问的时间，占24位
     unsigned lru:REDIS_LRU_BITS; /* lru time (relative to server.lruclock) */ 
 
-    // 引用计数
+    // 引用计数，实现对象共享和内存释放
     int refcount;
 
     // 指向实际值的指针
@@ -427,6 +427,7 @@ typedef struct redisObject {
  * Note that this macro is taken near the structure definition to make sure
  * we'll update it when the structure is changed, to avoid bugs like
  * bug #85 introduced exactly in this way. */
+//用ptr初始化字符串对象var，var.ptr=ptr，并且设置编码是raw，引用计数是1
 #define initStaticStringObject(_var,_ptr) do { \
     _var.refcount = 1; \
     _var.type = REDIS_STRING; \
@@ -436,26 +437,24 @@ typedef struct redisObject {
 
 /* To improve the quality of the LRU approximation we take a set of keys
  * that are good candidate for eviction across freeMemoryIfNeeded() calls.
- *
  * Entries inside the eviciton pool are taken ordered by idle time, putting
  * greater idle times to the right (ascending order).
- *
  * Empty entries have the key pointer set to NULL. */
 #define REDIS_EVICTION_POOL_SIZE 16
 struct evictionPoolEntry {
-    unsigned long long idle;    /* Object idle time. */
-    sds key;                    /* Key name. */
+    unsigned long long idle;    /* Object idle time. */ //idle时间
+    sds key;                    /* Key name. */         //键的名字
 };
 
 /* Redis database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
+//redis数据库，存键值对和过期时间库
 typedef struct redisDb {
-
     // 数据库键空间，保存着数据库中的所有键值对
     dict *dict;                 /* The keyspace for this DB */
 
-    // 键的过期时间，字典的键为键，字典的值为过期事件 UNIX 时间戳(long long)
+    // 键的过期时间，字典的键为键，字典的值为过期事件 UNIX 时间戳(毫秒为单位，long long)
     dict *expires;              /* Timeout of keys with a timeout set */
 
     // 正处于阻塞状态的键
@@ -470,7 +469,7 @@ typedef struct redisDb {
     struct evictionPoolEntry *eviction_pool;    /* Eviction pool of keys */
 
     // 数据库号码
-    int id;                     /* Database ID */
+    int id;                     /* Database ID */ //0~15
 
     // 数据库的键的平均 TTL ，统计信息
     long long avg_ttl;          /* Average TTL, just for stats */
@@ -478,12 +477,9 @@ typedef struct redisDb {
 } redisDb;
 
 /* Client MULTI/EXEC state */
-
-/*
- * 事务命令
+/* 事务命令
  */
 typedef struct multiCmd {
-
     // 参数
     robj **argv;
 
@@ -495,11 +491,9 @@ typedef struct multiCmd {
 
 } multiCmd;
 
-/*
- * 事务状态
+/*事务状态
  */
 typedef struct multiState {
-
     // 事务队列，FIFO 顺序
     multiCmd *commands;     /* Array of MULTI commands */
 
@@ -513,7 +507,6 @@ typedef struct multiState {
  * The fields used depend on client->btype. */
 // 阻塞状态
 typedef struct blockingState {
-
     /* Generic fields. */
     // 阻塞时限
     mstime_t timeout;       /* Blocking operation timeout. If UNIX current time
@@ -555,14 +548,12 @@ typedef struct readyList {
 
 /* With multiplexing we need to take per-client state.
  * Clients are taken in a liked list.
- *
  * 因为 I/O 复用的缘故，需要为每个客户端维持一个状态。
- *
- * 多个客户端状态被服务器用链表连接起来。
+ *多个客户端状态被服务器用链表连接起来(server.clients)。
  */
+//客户端
 typedef struct redisClient {
-
-    // 套接字描述符
+    // 套接字描述符，伪客户端是-1
     int fd;
 
     // 当前正在使用的数据库
