@@ -1296,7 +1296,6 @@ typedef int *redisGetKeysProc(struct redisCommand *cmd, robj **argv, int argc, i
  * Redis 命令
  */
 struct redisCommand {
-
     // 命令名字
     char *name;
 
@@ -1336,45 +1335,37 @@ struct redisFunctionSym {
 
 // 用于保存被排序值及其权重的结构
 typedef struct _redisSortObject {
-
     // 被排序键的值
     robj *obj;
 
     // 权重
     union {
-
         // 排序数字值时使用
         double score;
-
         // 排序字符串时使用
         robj *cmpobj;
-
     } u;
 
 } redisSortObject;
 
 // 排序操作
 typedef struct _redisSortOperation {
-
     // 操作的类型，可以是 GET 、 DEL 、INCR 或者 DECR
     // 目前只实现了 GET
     int type;
 
     // 用户给定的模式
     robj *pattern;
-
 } redisSortOperation;
 
 /* Structure to hold list iteration abstraction.
- *
  * 列表迭代器对象
  */
 typedef struct {
-
     // 列表对象
     robj *subject;
 
-    // 对象所使用的编码
+    // 对象所使用的编码：链表或ziplist
     unsigned char encoding;
 
     // 迭代的方向
@@ -1385,37 +1376,31 @@ typedef struct {
 
     // 链表节点的指针，迭代双端链表编码的列表时使用
     listNode *ln;
-
 } listTypeIterator;
 
 /* Structure for an entry while iterating over a list.
- *
  * 迭代列表时使用的记录结构，
  * 用于保存迭代器，以及迭代器返回的列表节点。
  */
 typedef struct {
-
     // 列表迭代器
     listTypeIterator *li;
 
     // ziplist 节点索引
     unsigned char *zi;  /* Entry in ziplist */
 
-    // 双端链表节点指针
+    // 双端链表 节点指针
     listNode *ln;       /* Entry in linked list */
-
 } listTypeEntry;
 
-/* Structure to hold set iteration abstraction. */
-/*
- * 多态集合迭代器
+/* Structure to hold set iteration abstraction. 
+ * 集合多态迭代器
  */
 typedef struct {
-
     // 被迭代的对象
     robj *subject;
 
-    // 对象的编码
+    // 对象的编码：字典或整数集合
     int encoding;
 
     // 索引值，编码为 intset 时使用
@@ -1423,25 +1408,22 @@ typedef struct {
 
     // 字典迭代器，编码为 HT 时使用
     dictIterator *di;
-
 } setTypeIterator;
 
 /* Structure to hold hash iteration abstraction. Note that iteration over
  * hashes involves both fields and values. Because it is possible that
  * not both are required, store pointers in the iterator to avoid
- * unnecessary memory allocation for fields/values. */
-/*
+ * unnecessary memory allocation for fields/values. 
  * 哈希对象的迭代器
  */
 typedef struct {
-
     // 被迭代的哈希对象
     robj *subject;
 
-    // 哈希对象的编码
+    // 哈希对象的编码：ziplist或字典
     int encoding;
 
-    // 域指针和值指针
+    // 键指针和值指针
     // 在迭代 ZIPLIST 编码的哈希对象时使用
     unsigned char *fptr, *vptr;
 
@@ -1662,7 +1644,6 @@ unsigned long aofRewriteBufferSize(void);
 /* Struct to hold a inclusive/exclusive range spec by score comparison. */
 // 表示开区间/闭区间范围的结构
 typedef struct {
-
     // 最小值和最大值
     double min, max;
 
