@@ -713,13 +713,13 @@ void tryResizeHashTables(int dbid) {
 int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(server.db[dbid].dict)) {
-        dictRehashMilliseconds(server.db[dbid].dict,1);
+        dictRehashMilliseconds(server.db[dbid].dict,1); //执行1ms的rehash
         return 1; /* already used our millisecond for this loop... */
     }
 
     /* Expires */
     if (dictIsRehashing(server.db[dbid].expires)) {
-        dictRehashMilliseconds(server.db[dbid].expires,1);
+        dictRehashMilliseconds(server.db[dbid].expires,1); //执行1ms的rehash
         return 1; /* already used our millisecond for this loop... */
     }
 
@@ -732,6 +732,7 @@ int incrementallyRehash(int dbid) {
  * memory pages are copied). The goal of this function is to update the ability
  * for dict.c to resize the hash tables accordingly to the fact we have o not
  * running childs. */
+// 如果有子进程在dump rdb或写aof，那么关闭rehash，否则开启rehash
 void updateDictResizePolicy(void) {
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1)
         dictEnableResize();
@@ -744,32 +745,25 @@ void updateDictResizePolicy(void) {
 /* Helper function for the activeExpireCycle() function.
  * This function will try to expire the key that is stored in the hash table
  * entry 'de' of the 'expires' hash table of a Redis database.
- *
  * activeExpireCycle() 函数使用的检查键是否过期的辅佐函数。
- *
  * If the key is found to be expired, it is removed from the database and
  * 1 is returned. Otherwise no operation is performed and 0 is returned.
- *
  * 如果 de 中的键已经过期，那么移除它，并返回 1 ，否则不做动作，并返回 0 。
- *
  * When a key is expired, server.stat_expiredkeys is incremented.
- *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls.
- *
  * 参数 now 是毫秒格式的当前时间
  */
+//删除过期键（传播给aof和slave）
 int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
     // 获取键的过期时间
     long long t = dictGetSignedIntegerVal(de);
     if (now > t) {
-
         // 键已过期
-
         sds key = dictGetKey(de);
-        robj *keyobj = createStringObject(key,sdslen(key));
+        robj *keyobj = createStringObject(key,sdslen(key));//为key创建字符串对象
 
-        // 传播过期命令
+        // 传播过期命令：添加到aof缓冲区中，已经传播给所有slave节点中
         propagateExpire(db,keyobj);
         // 从数据库中删除该键
         dbDelete(db,keyobj);
@@ -781,7 +775,6 @@ int activeExpireCycleTryExpire(redisDb *db, dictEntry *de, long long now) {
         server.stat_expiredkeys++;
         return 1;
     } else {
-
         // 键未过期
         return 0;
     }
