@@ -547,22 +547,24 @@ unsigned int dictEncObjHash(const void *key) {
 }
 
 /* Sets type hash table */
+//集合对象的字典
 dictType setDictType = {
     dictEncObjHash,            /* hash function */
     NULL,                      /* key dup */
     NULL,                      /* val dup */
-    dictEncObjKeyCompare,      /* key compare */
-    dictRedisObjectDestructor, /* key destructor */
+    dictEncObjKeyCompare,      /* key compare */ //如果是2个整数，直接比较long，否则用memcpy比较二进制数据
+    dictRedisObjectDestructor, /* key destructor *///减少对象的引用计数
     NULL                       /* val destructor */
 };
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
+//有序集合对象的字典
 dictType zsetDictType = {
     dictEncObjHash,            /* hash function */
     NULL,                      /* key dup */
     NULL,                      /* val dup */
-    dictEncObjKeyCompare,      /* key compare */
-    dictRedisObjectDestructor, /* key destructor */
+    dictEncObjKeyCompare,      /* key compare *///如果是2个整数，直接比较long，否则用memcpy比较二进制数据
+    dictRedisObjectDestructor, /* key destructor *///减少对象的引用计数
     NULL                       /* val destructor */
 };
 
@@ -571,9 +573,9 @@ dictType dbDictType = {
     dictSdsHash,                /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
-    dictSdsKeyCompare,          /* key compare */
-    dictSdsDestructor,          /* key destructor */
-    dictRedisObjectDestructor   /* val destructor */
+    dictSdsKeyCompare,          /* key compare */ //直接memcpy比较2个字符串
+    dictSdsDestructor,          /* key destructor */ //sdsfree释放字符串
+    dictRedisObjectDestructor   /* val destructor */ //减少对象引用计数
 };
 
 /* server.lua_scripts sha (as sds string) -> scripts (as robj) cache. */
@@ -591,29 +593,31 @@ dictType keyptrDictType = {
     dictSdsHash,               /* hash function */
     NULL,                      /* key dup */
     NULL,                      /* val dup */
-    dictSdsKeyCompare,         /* key compare */
+    dictSdsKeyCompare,         /* key compare *///用memcpy比较二进制数据
     NULL,                      /* key destructor */
     NULL                       /* val destructor */
 };
 
 /* Command table. sds string -> command struct pointer. */
+//命令字典
 dictType commandTableDictType = {
     dictSdsCaseHash,           /* hash function */
     NULL,                      /* key dup */
     NULL,                      /* val dup */
-    dictSdsKeyCaseCompare,     /* key compare */
+    dictSdsKeyCaseCompare,     /* key compare */ //忽略大小写来用memcpy比较二进制数据
     dictSdsDestructor,         /* key destructor */
     NULL                       /* val destructor */
 };
 
 /* Hash type hash table (note that small hashes are represented with ziplists) */
+//哈希对象的字典
 dictType hashDictType = {
     dictEncObjHash,             /* hash function */
     NULL,                       /* key dup */
     NULL,                       /* val dup */
     dictEncObjKeyCompare,       /* key compare */
-    dictRedisObjectDestructor,  /* key destructor */
-    dictRedisObjectDestructor   /* val destructor */
+    dictRedisObjectDestructor,  /* key destructor *///减少对象引用计数
+    dictRedisObjectDestructor   /* val destructor *///减少对象引用计数
 };
 
 /* Keylist hash table type has unencoded redis objects as keys and
@@ -673,19 +677,20 @@ dictType replScriptCacheDictType = {
     NULL                        /* val destructor */
 };
 
+//如果字典的负载因子小于0.1，那么返回true；否则返回false。
 int htNeedsResize(dict *dict) {
     long long size, used;
 
     size = dictSlots(dict);
     used = dictSize(dict);
     return (size && used && size > DICT_HT_INITIAL_SIZE &&
-            (used*100/size < REDIS_HT_MINFILL));
+            (used*100/size < REDIS_HT_MINFILL)); //MINFILL是10，就是used/size < 10%
 }
 
 /* If the percentage of used slots in the HT reaches REDIS_HT_MINFILL
  * we resize the hash table to save memory */
-// 如果字典的使用率比 REDIS_HT_MINFILL 常量要低
-// 那么通过缩小字典的体积来节约内存
+// 如果字典的使用率比 REDIS_HT_MINFILL 常量要低，那么通过缩小字典的体积来节约内存
+//即如果dbid数据库中的字典负载因子小于0.1的话，那么缩小字典来节约内存
 void tryResizeHashTables(int dbid) {
     if (htNeedsResize(server.db[dbid].dict))
         dictResize(server.db[dbid].dict);
@@ -697,18 +702,15 @@ void tryResizeHashTables(int dbid) {
  * we write/read from the hash table. Still if the server is idle, the hash
  * table will use two tables for a long time. So we try to use 1 millisecond
  * of CPU time at every call of this function to perform some rehahsing.
- *
  * 虽然服务器在对数据库执行读取/写入命令时会对数据库进行渐进式 rehash ，
  * 但如果服务器长期没有执行命令的话，数据库字典的 rehash 就可能一直没办法完成，
  * 为了防止出现这种情况，我们需要对数据库执行主动 rehash 。
- *
  * The function returns 1 if some rehashing was performed, otherwise 0
  * is returned. 
- *
  * 函数在执行了主动 rehash 时返回 1 ，否则返回 0 。
  */
+//对dbid的键值对字典和过期时间字典执行1ms的rehash（如果正在rehash的话，防止字典长时间没有读写操作让rehash一直没结束）
 int incrementallyRehash(int dbid) {
-
     /* Keys dictionary */
     if (dictIsRehashing(server.db[dbid].dict)) {
         dictRehashMilliseconds(server.db[dbid].dict,1);
