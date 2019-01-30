@@ -1631,7 +1631,7 @@ void createSharedObjects(void) {
         shared.integers[j]->encoding = REDIS_ENCODING_INT;
     }
 
-    // 常用长度 bulk 或者 multi bulk 回复
+    // 常用长度 bulk 或者 multi bulk 回复：32个
     for (j = 0; j < REDIS_SHARED_BULKHDR_LEN; j++) {
         shared.mbulkhdr[j] = createObject(REDIS_STRING,
             sdscatprintf(sdsempty(),"*%d\r\n",j));
@@ -1642,10 +1642,12 @@ void createSharedObjects(void) {
      * actually used for their value but as a special object meaning
      * respectively the minimum possible string and the maximum possible
      * string in string comparisons for the ZRANGEBYLEX command. */
+    //标记最小和最大的字符串
     shared.minstring = createStringObject("minstring",9);
     shared.maxstring = createStringObject("maxstring",9);
 }
 
+//初始化server的相关配置项
 void initServerConfig() {
     int j;
 
@@ -1659,7 +1661,7 @@ void initServerConfig() {
     server.hz = REDIS_DEFAULT_HZ;
     // 为运行 ID 加上结尾字符
     server.runid[REDIS_RUN_ID_SIZE] = '\0';
-    // 设置服务器的运行架构
+    // 设置服务器的运行架构，看long是多大，一般是64位架构
     server.arch_bits = (sizeof(long) == 8) ? 64 : 32;
     // 设置默认服务器端口号
     server.port = REDIS_SERVERPORT;
@@ -1669,12 +1671,12 @@ void initServerConfig() {
     server.unixsocketperm = REDIS_DEFAULT_UNIX_SOCKET_PERM;
     server.ipfd_count = 0;
     server.sofd = -1;
-    server.dbnum = REDIS_DEFAULT_DBNUM;
+    server.dbnum = REDIS_DEFAULT_DBNUM; //16个db
     server.verbosity = REDIS_DEFAULT_VERBOSITY;
     server.maxidletime = REDIS_MAXIDLETIME;
     server.tcpkeepalive = REDIS_DEFAULT_TCP_KEEPALIVE;
     server.active_expire_enabled = 1;
-    server.client_max_querybuf_len = REDIS_MAX_QUERYBUF_LEN;
+    server.client_max_querybuf_len = REDIS_MAX_QUERYBUF_LEN; //1GB大小
     server.saveparams = NULL;
     server.loading = 0;
     server.logfile = zstrdup(REDIS_DEFAULT_LOGFILE);
@@ -1710,7 +1712,7 @@ void initServerConfig() {
     server.maxclients = REDIS_MAX_CLIENTS;
     server.bpop_blocked_clients = 0;
     server.maxmemory = REDIS_DEFAULT_MAXMEMORY;
-    server.maxmemory_policy = REDIS_DEFAULT_MAXMEMORY_POLICY;
+    server.maxmemory_policy = REDIS_DEFAULT_MAXMEMORY_POLICY; //默认是不淘汰
     server.maxmemory_samples = REDIS_DEFAULT_MAXMEMORY_SAMPLES;
     server.hash_max_ziplist_entries = REDIS_HASH_MAX_ZIPLIST_ENTRIES;
     server.hash_max_ziplist_value = REDIS_HASH_MAX_ZIPLIST_VALUE;
@@ -1739,9 +1741,10 @@ void initServerConfig() {
     // 初始化 LRU 时间
     server.lruclock = getLRUClock();
 
-    // 初始化并设置保存条件
+    // 初始化并设置保存条件，这里释放server.saveparams内存
     resetServerSaveParams();
 
+    //这里realloc saveparams的内存，然后将条件添加到saveparams中
     appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
     appendServerSaveParams(300,100);  /* save after 5 minutes and 100 changes */
     appendServerSaveParams(60,10000); /* save after 1 minute and 10000 changes */
@@ -1790,7 +1793,7 @@ void initServerConfig() {
      * redis.conf using the rename-command directive. */
     // 初始化命令表
     // 在这里初始化是因为接下来读取 .conf 文件时可能会用到这些命令
-    server.commands = dictCreate(&commandTableDictType,NULL);
+    server.commands = dictCreate(&commandTableDictType,NULL);//创建命令表字典
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
     populateCommandTable();
     server.delCommand = lookupCommandByCString("del");
