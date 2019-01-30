@@ -1266,6 +1266,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
 
     /* Update the time cache. */
+    //更新unixtime和mstime
     updateCachedTime();
 
     // 记录服务器执行命令的次数
@@ -1303,7 +1304,6 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
      * not ok doing so inside the signal handler. */
     // 服务器进程收到 SIGTERM 信号，关闭服务器
     if (server.shutdown_asap) {
-
         // 尝试关闭服务器
         if (prepareForShutdown(0) == REDIS_OK) exit(0);
 
@@ -1350,7 +1350,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     clientsCron();
 
     /* Handle background operations on Redis databases. */
-    // 对数据库执行各种操作
+    // 对数据库执行各种操作：调整键值对字典和过期键字典的大小、以及渐进式rehash
     databasesCron();
 
     /* Start a scheduled AOF rewrite if this was requested by the user while
@@ -1365,6 +1365,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 
     /* Check if a background saving or AOF rewrite in progress terminated. */
     // 检查 BGSAVE 或者 BGREWRITEAOF 是否已经执行完毕
+    //如果有aof或rdb子进程在执行
     if (server.rdb_child_pid != -1 || server.aof_child_pid != -1) {
         int statloc;
         pid_t pid;
@@ -1376,11 +1377,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
             
             if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
-            // BGSAVE 执行完毕
+            // BGSAVE 执行完毕，执行回调函数
             if (pid == server.rdb_child_pid) {
                 backgroundSaveDoneHandler(exitcode,bysignal);
 
-            // BGREWRITEAOF 执行完毕
+            // BGREWRITEAOF 执行完毕，执行回调函数
             } else if (pid == server.aof_child_pid) {
                 backgroundRewriteDoneHandler(exitcode,bysignal);
 
@@ -1389,10 +1390,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
                     "Warning, detected child with unmatched pid: %ld",
                     (long)pid);
             }
-            updateDictResizePolicy();
+            updateDictResizePolicy(); //开启可以rehash的标识
         }
     } else {
-
         /* If there is not a background saving/rewrite in progress check if
          * we have to save/rewrite now */
         // 既然没有 BGSAVE 或者 BGREWRITEAOF 在执行，那么检查是否需要执行它们
@@ -1444,8 +1444,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
          }
     }
 
-    // 根据 AOF 政策，
-    // 考虑是否需要将 AOF 缓冲区中的内容写入到 AOF 文件中
+    // 根据 AOF 政策，考虑是否需要将 AOF 缓冲区中的内容写入到 AOF 文件中
     /* AOF postponed flush: Try at every cron cycle if the slow fsync
      * completed. */
     if (server.aof_flush_postponed_start) flushAppendOnlyFile(0);
@@ -1460,7 +1459,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     }
 
     /* Close clients that need to be closed asynchronous */
-    // 关闭那些需要异步关闭的客户端
+    // 关闭那些需要异步关闭的客户端：遍历server.clients_to_close，依次关闭每个client
     freeClientsInAsyncFreeQueue();
 
     /* Clear the paused clients flag if needed. */
@@ -1534,7 +1533,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         processUnblockedClients();
 
     /* Write the AOF buffer on disk */
-    // 将 AOF 缓冲区的内容写入到 AOF 文件
+    // 将 AOF 缓冲区的内容写入到 AOF 文件！！！
     flushAppendOnlyFile(0);
 
     /* Call the Redis Cluster before sleep function. */
