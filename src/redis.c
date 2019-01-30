@@ -1899,22 +1899,19 @@ void adjustOpenFilesLimit(void) {
 
 /* Initialize a set of file descriptors to listen to the specified 'port'
  * binding the addresses specified in the Redis server configuration.
- *
  * The listening file descriptors are stored in the integer array 'fds'
  * and their number is set in '*count'.
- *
  * The addresses to bind are specified in the global server.bindaddr array
  * and their number is server.bindaddr_count. If the server configuration
  * contains no specific addresses to bind, this function will try to
  * bind * (all addresses) for both the IPv4 and IPv6 protocols.
- *
  * On success the function returns REDIS_OK.
- *
  * On error the function returns REDIS_ERR. For the function to be on
  * error, at least one of the server.bindaddr addresses was
  * impossible to bind, or no bind addresses were specified in the server
  * configuration but the function is not able to bind * for at least
  * one of the IPv4 or IPv6 protocols. */
+//让fds[count]监听端口
 int listenToPort(int port, int *fds, int *count) {
     int j;
 
@@ -1966,6 +1963,7 @@ int listenToPort(int port, int *fds, int *count) {
 /* Resets the stats that we expose via INFO or other means that we want
  * to reset via CONFIG RESETSTAT. The function is also used in order to
  * initialize these fields in initServer() at server startup. */
+//重置server相关的统计信息
 void resetServerStats(void) {
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
@@ -1984,6 +1982,7 @@ void resetServerStats(void) {
     server.ops_sec_last_sample_ops = 0;
 }
 
+// init server
 void initServer() {
     int j;
 
@@ -2000,9 +1999,9 @@ void initServer() {
 
     // 初始化并创建数据结构
     server.current_client = NULL;
-    server.clients = listCreate();
-    server.clients_to_close = listCreate();
-    server.slaves = listCreate();
+    server.clients = listCreate(); //创建客户端链表
+    server.clients_to_close = listCreate();//为clients_to_close创建链表
+    server.slaves = listCreate(); 
     server.monitors = listCreate();
     server.slaveseldb = -1; /* Force to emit the first SELECT command. */
     server.unblocked_clients = listCreate();
@@ -2013,9 +2012,9 @@ void initServer() {
 
     // 创建共享对象
     createSharedObjects();
-    adjustOpenFilesLimit();
-    server.el = aeCreateEventLoop(server.maxclients+REDIS_EVENTLOOP_FDSET_INCR);
-    server.db = zmalloc(sizeof(redisDb)*server.dbnum);
+    adjustOpenFilesLimit();//调整max fd number
+    server.el = aeCreateEventLoop(server.maxclients+REDIS_EVENTLOOP_FDSET_INCR);//创建epoll实例
+    server.db = zmalloc(sizeof(redisDb)*server.dbnum);//创建出16个db
 
     /* Open the TCP listening socket for the user commands. */
     // 打开 TCP 监听端口，用于等待客户端的命令请求
@@ -2043,15 +2042,15 @@ void initServer() {
     }
 
     /* Create the Redis databases, and initialize other internal state. */
-    // 创建并初始化数据库结构
+    // 创建并初始化数据库结构，为每一个数据库创建相关数据结构
     for (j = 0; j < server.dbnum; j++) {
-        server.db[j].dict = dictCreate(&dbDictType,NULL);
-        server.db[j].expires = dictCreate(&keyptrDictType,NULL);
+        server.db[j].dict = dictCreate(&dbDictType,NULL); //创建键值对字典
+        server.db[j].expires = dictCreate(&keyptrDictType,NULL); //创建过期键字典
         server.db[j].blocking_keys = dictCreate(&keylistDictType,NULL);
         server.db[j].ready_keys = dictCreate(&setDictType,NULL);
         server.db[j].watched_keys = dictCreate(&keylistDictType,NULL);
-        server.db[j].eviction_pool = evictionPoolAlloc();
-        server.db[j].id = j;
+        server.db[j].eviction_pool = evictionPoolAlloc();//创建eviction_poll
+        server.db[j].id = j;//设置id为j
         server.db[j].avg_ttl = 0;
     }
 
@@ -2062,10 +2061,10 @@ void initServer() {
     listSetMatchMethod(server.pubsub_patterns,listMatchPubsubPattern);
 
     server.cronloops = 0;
-    server.rdb_child_pid = -1;
-    server.aof_child_pid = -1;
-    aofRewriteBufferReset();
-    server.aof_buf = sdsempty();
+    server.rdb_child_pid = -1;//rdb子进程号
+    server.aof_child_pid = -1;//aof子进程号
+    aofRewriteBufferReset();//初始化aof重写缓冲区
+    server.aof_buf = sdsempty();//初始化aof缓冲区
     server.lastsave = time(NULL); /* At startup we consider the DB saved. */
     server.lastbgsave_try = 0;    /* At startup we never tried to BGSAVE. */
     server.rdb_save_time_last = -1;
@@ -2080,11 +2079,11 @@ void initServer() {
     server.aof_last_write_status = REDIS_OK;
     server.aof_last_write_errno = 0;
     server.repl_good_slaves_count = 0;
-    updateCachedTime();
+    updateCachedTime();//更新unixtime和mstime
 
     /* Create the serverCron() time event, that's our main way to process
      * background operations. */
-    // 为 serverCron() 创建时间事件
+    // 重要！为 serverCron() 创建时间事件，计时器在1ms后到达？？？todo
     if(aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
         redisPanic("Can't create the serverCron time event.");
         exit(1);
@@ -2127,7 +2126,7 @@ void initServer() {
     if (server.arch_bits == 32 && server.maxmemory == 0) {
         redisLog(REDIS_WARNING,"Warning: 32 bit instance detected but no memory limit set. Setting 3 GB maxmemory limit with 'noeviction' policy now.");
         server.maxmemory = 3072LL*(1024*1024); /* 3 GB */
-        server.maxmemory_policy = REDIS_MAXMEMORY_NO_EVICTION;
+        server.maxmemory_policy = REDIS_MAXMEMORY_NO_EVICTION;//无淘汰策略
     }
 
     // 如果服务器以 cluster 模式打开，那么初始化 cluster
@@ -2148,7 +2147,6 @@ void initServer() {
 
 /* Populates the Redis Command Table starting from the hard coded list
  * we have on top of redis.c file. 
- *
  * 根据 redis.c 文件顶部的命令列表，创建命令表
  */
 void populateCommandTable(void) {
@@ -2158,7 +2156,6 @@ void populateCommandTable(void) {
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
     for (j = 0; j < numcommands; j++) {
-        
         // 指定命令
         struct redisCommand *c = redisCommandTable+j;
 
@@ -2192,13 +2189,10 @@ void populateCommandTable(void) {
 
         /* Populate an additional dictionary that will be unaffected
          * by rename-command statements in redis.conf. 
-         *
          * 将命令也关联到原始命令表
-         *
          * 原始命令表不会受 redis.conf 中命令改名的影响
          */
         retval2 = dictAdd(server.orig_commands, sdsnew(c->name), c);
-
         redisAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
 }
