@@ -1498,7 +1498,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
 /* This function gets called every time Redis is entering the
  * main loop of the event driven library, that is, before to sleep
  * for ready file descriptors. */
-// 每次处理事件之前执行
+// 每次epoll_wait等待ready fd之前执行
 void beforeSleep(struct aeEventLoop *eventLoop) {
     REDIS_NOTUSED(eventLoop);
 
@@ -1546,11 +1546,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 void createSharedObjects(void) {
     int j;
 
-    // 常用回复
-    shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n"));
-    shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n"));
-    shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n"));
-    shared.emptybulk = createObject(REDIS_STRING,sdsnew("$0\r\n\r\n"));
+    // 常用回复，都是字符串对象
+    shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n")); //换行符
+    shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n")); //回复OK
+    shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n")); //回复err
+    shared.emptybulk = createObject(REDIS_STRING,sdsnew("$0\r\n\r\n")); //
     shared.czero = createObject(REDIS_STRING,sdsnew(":0\r\n"));
     shared.cone = createObject(REDIS_STRING,sdsnew(":1\r\n"));
     shared.cnegone = createObject(REDIS_STRING,sdsnew(":-1\r\n"));
@@ -1599,7 +1599,7 @@ void createSharedObjects(void) {
     shared.colon = createObject(REDIS_STRING,sdsnew(":"));
     shared.plus = createObject(REDIS_STRING,sdsnew("+"));
 
-    // 常用 SELECT 命令
+    // 常用 SELECT 命令：10
     for (j = 0; j < REDIS_SHARED_SELECT_CMDS; j++) {
         char dictid_str[64];
         int dictid_len;
@@ -1625,7 +1625,7 @@ void createSharedObjects(void) {
     shared.lpop = createStringObject("LPOP",4);
     shared.lpush = createStringObject("LPUSH",5);
 
-    // 常用整数
+    // 常用整数，从0到10000。是int编码的字符串对象
     for (j = 0; j < REDIS_SHARED_INTEGERS; j++) {
         shared.integers[j] = createObject(REDIS_STRING,(void*)(long)j);
         shared.integers[j]->encoding = REDIS_ENCODING_INT;
