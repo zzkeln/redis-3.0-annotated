@@ -1844,18 +1844,19 @@ void adjustOpenFilesLimit(void) {
             /* Try to set the file limit to match 'maxfiles' or at least
              * to the higher value supported less than maxfiles. */
             f = maxfiles;
+            //从maxfiles开始尝试设置，如果不行的话，减少16继续尝试设置
             while(f > oldlimit) {
                 int decr_step = 16;
 
                 limit.rlim_cur = f;
                 limit.rlim_max = f;
-                if (setrlimit(RLIMIT_NOFILE,&limit) != -1) break;
+                if (setrlimit(RLIMIT_NOFILE,&limit) != -1) break;//设置成功，直接退出循环
                 setrlimit_error = errno;
 
                 /* We failed to set file limit to 'f'. Try with a
                  * smaller limit decrementing by a few FDs per iteration. */
                 if (f < decr_step) break;
-                f -= decr_step;
+                f -= decr_step;//上面设置失败了，减去16继续尝试设置
             }
 
             /* Assume that the limit we get initially is still valid if
@@ -1864,7 +1865,7 @@ void adjustOpenFilesLimit(void) {
 
             if (f != maxfiles) {
                 int old_maxclients = server.maxclients;
-                server.maxclients = f-REDIS_MIN_RESERVED_FDS;
+                server.maxclients = f-REDIS_MIN_RESERVED_FDS; //更新maxclients
                 if (server.maxclients < 1) {
                     redisLog(REDIS_WARNING,"Your current 'ulimit -n' "
                         "of %llu is not enough for Redis to start. "
