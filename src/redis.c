@@ -928,7 +928,7 @@ void activeExpireCycle(int type) {
             if (num > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP)
                 num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
 
-            // 开始遍历数据库
+            // 开始遍历数据库，每次遍历随机扫描20个键
             while (num--) {
                 dictEntry *de;
                 long long ttl;
@@ -996,7 +996,6 @@ unsigned int getLRUClock(void) {
 /* Add a sample to the operations per second array of samples. */
 // 将服务器的命令执行次数记录到抽样数组中
 void trackOperationsPerSecond(void) {
-
     // 计算两次抽样之间的时间长度，毫秒格式
     long long t = mstime() - server.ops_sec_last_sample_time;
 
@@ -1033,14 +1032,12 @@ long long getOperationsPerSecond(void) {
 }
 
 /* Check for timeouts. Returns non-zero if the client was terminated */
-// 检查客户端是否已经超时，如果超时就关闭客户端，并返回 1 ；
-// 否则返回 0 。
+// 检查客户端是否已经超时，如果超时就关闭客户端，并返回 1 ；否则返回 0。server端设置了maxidletime
 int clientsCronHandleTimeout(redisClient *c) {
-
     // 获取当前时间
     time_t now = server.unixtime;
 
-    // 服务器设置了 maxidletime 时间
+    // 服务器设置了 maxidletime 时间，几种条件下的客户端不会检查（作为master, slave，阻塞等）
     if (server.maxidletime &&
         // 不检查作为从服务器的客户端
         !(c->flags & REDIS_SLAVE) &&    /* no timeout for slaves */
@@ -1083,11 +1080,8 @@ int clientsCronHandleTimeout(redisClient *c) {
 
 /* The client query buffer is an sds.c string that can end with a lot of
  * free space not used, this function reclaims space if needed.
- *
  * 根据情况，缩小查询缓冲区的大小。
- *
  * The function always returns 0 as it never terminates the client. 
- *
  * 函数总是返回 0 ，因为它不会中止客户端。
  */
 int clientsCronResizeQueryBuffer(redisClient *c) {
@@ -1095,20 +1089,18 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
     time_t idletime = server.unixtime - c->lastinteraction;
 
     /* There are two conditions to resize the query buffer:
-     *
      * 符合以下两个条件的话，执行大小调整：
-     *
      * 1) Query buffer is > BIG_ARG and too big for latest peak.
      *    查询缓冲区的大小大于 BIG_ARG 以及 querybuf_peak
-     *
      * 2) Client is inactive and the buffer is bigger than 1k. 
      *    客户端不活跃，并且缓冲区大于 1k 。
      */
-    if (((querybuf_size > REDIS_MBULK_BIG_ARG) &&
+    if (((querybuf_size > REDIS_MBULK_BIG_ARG) && //大于32k
          (querybuf_size/(c->querybuf_peak+1)) > 2) ||
          (querybuf_size > 1024 && idletime > 2))
     {
         /* Only resize the query buffer if it is actually wasting space. */
+        //free空间大于1k，那么在去除冗余空间
         if (sdsavail(c->querybuf) > 1024) {
             c->querybuf = sdsRemoveFreeSpace(c->querybuf);
         }
@@ -1122,20 +1114,16 @@ int clientsCronResizeQueryBuffer(redisClient *c) {
     return 0;
 }
 
+//检查批量的客户端，看他们的idle时间是否超过配置（超过则关闭）、检查它们的查询缓冲区大小（根据情况，释放querybuf的free空间）
 void clientsCron(void) {
     /* Make sure to process at least 1/(server.hz*10) of clients per call.
-     *
-     * 这个函数每次执行都会处理至少 1/server.hz*10 个客户端。
-     *
+     * 这个函数每次执行都会处理至少 1/server.hz*10 个客户端。每秒遍历1/10客户端
      * Since this function is called server.hz times per second we are sure that
      * in the worst case we process all the clients in 10 seconds.
-     *
      * 因为这个函数每秒钟会调用 server.hz 次，
      * 所以在最坏情况下，服务器需要使用 10 秒钟来遍历所有客户端。
-     *
      * In normal conditions (a reasonable number of clients) we process
      * all the clients in a shorter time. 
-     *
      * 在一般情况下，遍历所有客户端所需的时间会比实际中短很多。
      */
 
@@ -1174,9 +1162,8 @@ void clientsCron(void) {
 /* This function handles 'background' operations we are required to do
  * incrementally in Redis databases, such as active key expiring, resizing,
  * rehashing. */
-// 对数据库执行删除过期键，调整大小，以及主动和渐进式 rehash
+// 对数据库执行删除过期键，调整大小，以及主动和渐进式 rehash（调整字典大小和rehash，都是针对键值对字典和过期键字典）
 void databasesCron(void) {
-
     // 函数先从数据库中删除过期键，然后再对数据库的大小进行修改
 
     /* Expire keys by random sampling. Not required for slaves
@@ -1196,7 +1183,7 @@ void databasesCron(void) {
          * cron loop iteration. */
         static unsigned int resize_db = 0;
         static unsigned int rehash_db = 0;
-        unsigned int dbs_per_call = REDIS_DBCRON_DBS_PER_CALL;
+        unsigned int dbs_per_call = REDIS_DBCRON_DBS_PER_CALL; //16个
         unsigned int j;
 
         /* Don't test more DBs than we have. */
@@ -1204,14 +1191,14 @@ void databasesCron(void) {
         if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
 
         /* Resize */
-        // 调整字典的大小
+        // 调整字典的大小，就是调整键值对字典和过期键字典的大小：将slot数量调整为大于used数量的最小2次方
         for (j = 0; j < dbs_per_call; j++) {
             tryResizeHashTables(resize_db % server.dbnum);
             resize_db++;
         }
 
         /* Rehash */
-        // 对字典进行渐进式 rehash
+        // 对字典进行渐进式 rehash：对键值对字典和过期键字典进行1ms的rehash操作
         if (server.activerehashing) {
             for (j = 0; j < dbs_per_call; j++) {
                 int work_done = incrementallyRehash(rehash_db % server.dbnum);
@@ -1230,55 +1217,44 @@ void databasesCron(void) {
  * virtual memory and aging there is to store the current time in objects at
  * every object access, and accuracy is not needed. To access a global var is
  * a lot faster than calling time(NULL) */
+//更新server的unixtime和mstime
 void updateCachedTime(void) {
     server.unixtime = time(NULL);
     server.mstime = mstime();
 }
 
 /* This is our timer interrupt, called server.hz times per second.
- *
  * 这是 Redis 的时间中断器，每秒调用 server.hz 次。
- *
  * Here is where we do a number of things that need to be done asynchronously.
  * For instance:
- *
  * 以下是需要异步执行的操作：
- *
  * - Active expired keys collection (it is also performed in a lazy way on
  *   lookup).
  *   主动清除过期键。
- *
  * - Software watchdog.
  *   更新软件 watchdog 的信息。
- *
  * - Update some statistic.
  *   更新统计信息。
- *
  * - Incremental rehashing of the DBs hash tables.
  *   对数据库进行渐增式 Rehash
- *
  * - Triggering BGSAVE / AOF rewrite, and handling of terminated children.
  *   触发 BGSAVE 或者 AOF 重写，并处理之后由 BGSAVE 和 AOF 重写引发的子进程停止。
- *
  * - Clients timeout of different kinds.
  *   处理客户端超时。
- *
  * - Replication reconnection.
  *   复制重连
- *
  * - Many more...
  *   等等。。。
  *
  * Everything directly called here will be called server.hz times per second,
  * so in order to throttle execution of things we want to do less frequently
  * a macro is used: run_with_period(milliseconds) { .... }
- *
  * 因为 serverCron 函数中的所有代码都会每秒调用 server.hz 次，
  * 为了对部分代码的调用次数进行限制，
  * 使用了一个宏 run_with_period(milliseconds) { ... } ，
  * 这个宏可以将被包含代码的执行次数降低为每 milliseconds 执行一次。
  */
-
+//每100ms执行一次
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     int j;
     REDIS_NOTUSED(eventLoop);
