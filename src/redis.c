@@ -2391,7 +2391,7 @@ void call(redisClient *c, int flags) {
     // 如果有需要，将命令放到 SLOWLOG 里面
     if (flags & REDIS_CALL_SLOWLOG && c->cmd->proc != execCommand)
         slowlogPushEntryIfNeeded(c->argv,c->argc,duration);
-    // 更新命令的统计信息
+    // 更新命令的统计信息，包括命令执行耗时和调用次数
     if (flags & REDIS_CALL_STATS) {
         c->cmd->microseconds += duration;
         c->cmd->calls++;
@@ -2443,15 +2443,12 @@ void call(redisClient *c, int flags) {
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
  * server for a bulk read from the client.
- *
  * 这个函数执行时，我们已经读入了一个完整的命令到客户端，
  * 这个函数负责执行这个命令，
  * 或者服务器准备从客户端中进行一次读取。
- *
  * If 1 is returned the client is still alive and valid and
  * other operations can be performed by the caller. Otherwise
  * if 0 is returned the client was destroyed (i.e. after QUIT). 
- *
  * 如果这个函数返回 1 ，那么表示客户端在执行命令之后仍然存在，
  * 调用者可以继续执行其他操作。
  * 否则，如果这个函数返回 0 ，那么表示客户端已经被销毁。
@@ -2473,14 +2470,14 @@ int processCommand(redisClient *c) {
     // 查找命令，并进行命令合法性检查，以及命令参数个数检查
     c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
     if (!c->cmd) {
-        // 没找到指定的命令
+        // 没找到指定的命令，返回未知命令错误
         flagTransaction(c);
         addReplyErrorFormat(c,"unknown command '%s'",
             (char*)c->argv[0]->ptr);
         return REDIS_OK;
     } else if ((c->cmd->arity > 0 && c->cmd->arity != c->argc) ||
                (c->argc < -c->cmd->arity)) {
-        // 参数个数错误
+        // 参数个数错误，返回参数错误信息
         flagTransaction(c);
         addReplyErrorFormat(c,"wrong number of arguments for '%s' command",
             c->cmd->name);
@@ -2497,16 +2494,11 @@ int processCommand(redisClient *c) {
     }
 
     /* If cluster is enabled perform the cluster redirection here.
-     *
      * 如果开启了集群模式，那么在这里进行转向操作。
-     *
      * However we don't perform the redirection if:
-     *
      * 不过，如果有以下情况出现，那么节点不进行转向：
-     *
      * 1) The sender of this command is our master.
      *    命令的发送者是本节点的主节点
-     *
      * 2) The command has no key arguments. 
      *    命令没有 key 参数
      */
@@ -2567,7 +2559,7 @@ int processCommand(redisClient *c) {
     // 如果设置了最大内存，那么检查内存是否超过限制，并做相应的操作
     if (server.maxmemory) {
         // 如果内存已超过限制，那么尝试通过删除过期键来释放内存
-        int retval = freeMemoryIfNeeded();
+        int retval = freeMemoryIfNeeded(); //这里会释放一些内存
         // 如果即将要执行的命令可能占用大量内存（REDIS_CMD_DENYOOM）
         // 并且前面的内存释放失败的话
         // 那么向客户端返回内存错误
@@ -2699,6 +2691,7 @@ int processCommand(redisClient *c) {
 }
 
 /*================================== Shutdown =============================== */
+//关服务器相关操作
 
 /* Close listening sockets. Also unlink the unix domain socket if
  * unlink_unix_socket is non-zero. */
@@ -2718,7 +2711,7 @@ void closeListeningSockets(int unlink_unix_socket) {
         unlink(server.unixsocket); /* don't care if this fails */
     }
 }
-
+//准备关服务器：杀掉rdb或aof子进程
 int prepareForShutdown(int flags) {
     int save = flags & REDIS_SHUTDOWN_SAVE;
     int nosave = flags & REDIS_SHUTDOWN_NOSAVE;
@@ -2732,7 +2725,7 @@ int prepareForShutdown(int flags) {
     if (server.rdb_child_pid != -1) {
         redisLog(REDIS_WARNING,"There is a child saving an .rdb. Killing it!");
         kill(server.rdb_child_pid,SIGUSR1);
-        rdbRemoveTempFile(server.rdb_child_pid);
+        rdbRemoveTempFile(server.rdb_child_pid); //删除rdb临时文件
     }
 
     // 同理，杀死正在执行 BGREWRITEAOF 的子进程
@@ -2755,7 +2748,7 @@ int prepareForShutdown(int flags) {
     if ((server.saveparamslen > 0 && !nosave) || save) {
         redisLog(REDIS_NOTICE,"Saving the final RDB snapshot before exiting.");
         /* Snapshotting. Perform a SYNC SAVE and exit */
-        if (rdbSave(server.rdb_filename) != REDIS_OK) {
+        if (rdbSave(server.rdb_filename) != REDIS_OK) { //执行save操作
             /* Ooops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() Redis will be notified that the background
@@ -2791,6 +2784,7 @@ int prepareForShutdown(int flags) {
  * can avoid leaking any information about the password length and any
  * possible branch misprediction related leak.
  */
+//比较字符串a和b，逐个字符比较？
 int time_independent_strcmp(char *a, char *b) {
     char bufa[REDIS_AUTHPASS_MAX_LEN], bufb[REDIS_AUTHPASS_MAX_LEN];
     /* The above two strlen perform len(a) + len(b) operations where either
@@ -2805,8 +2799,10 @@ int time_independent_strcmp(char *a, char *b) {
     /* We can't compare strings longer than our static buffers.
      * Note that this will never pass the first test in practical circumstances
      * so there is no info leak. */
+    //a和b不能超过512字节
     if (alen > sizeof(bufa) || blen > sizeof(bufb)) return 1;
 
+    //重置bufa和bufb为0
     memset(bufa,0,sizeof(bufa));        /* Constant time. */
     memset(bufb,0,sizeof(bufb));        /* Constant time. */
     /* Again the time of the following two copies is proportional to
@@ -2824,10 +2820,12 @@ int time_independent_strcmp(char *a, char *b) {
     return diff; /* If zero strings are the same. */
 }
 
+//验证密码，和redis.conf中密码进行对比
 void authCommand(redisClient *c) {
     if (!server.requirepass) {
         addReplyError(c,"Client sent AUTH, but no password is set");
     } else if (!time_independent_strcmp(c->argv[1]->ptr, server.requirepass)) {
+        //进入这里说明相等
       c->authenticated = 1;
       addReply(c,shared.ok);
     } else {
@@ -2835,15 +2833,15 @@ void authCommand(redisClient *c) {
       addReplyError(c,"invalid password");
     }
 }
-
+//直接返回pong
 void pingCommand(redisClient *c) {
     addReply(c,shared.pong);
 }
-
+//直接将客户端参数返回
 void echoCommand(redisClient *c) {
     addReplyBulk(c,c->argv[1]);
 }
-
+//将时间参数返回：2行，第一行是秒数，第二行是微秒数
 void timeCommand(redisClient *c) {
     struct timeval tv;
 
@@ -2857,6 +2855,7 @@ void timeCommand(redisClient *c) {
 
 /* Convert an amount of bytes into a human readable string in the form
  * of 100B, 2G, 100M, 4K, and so forth. */
+//将n转换成可读的k,M,G放入字符串s中
 void bytesToHuman(char *s, unsigned long long n) {
     double d;
 
@@ -2879,6 +2878,7 @@ void bytesToHuman(char *s, unsigned long long n) {
 /* Create the string returned by the INFO command. This is decoupled
  * by the INFO command itself as we need to report the same information
  * on memory corruption problems. */
+//返回info命令需要的stat相关信息
 sds genRedisInfoString(char *section) {
     sds info = sdsempty();
     time_t uptime = server.unixtime-server.stat_starttime;
@@ -2947,14 +2947,14 @@ sds genRedisInfoString(char *section) {
 #else
             0,0,0,
 #endif
-            (long) getpid(),
-            server.runid,
-            server.port,
+            (long) getpid(), //进程号
+            server.runid, //runid
+            server.port, //端口号
             (intmax_t)uptime,
             (intmax_t)(uptime/(3600*24)),
             server.hz,
             (unsigned long) server.lruclock,
-            server.configfile ? server.configfile : "");
+            server.configfile ? server.configfile : ""); //配置文件路径和文件名
     }
 
     /* Clients */
@@ -3056,9 +3056,9 @@ sds genRedisInfoString(char *section) {
                 (long long) server.aof_current_size,
                 (long long) server.aof_rewrite_base_size,
                 server.aof_rewrite_scheduled,
-                sdslen(server.aof_buf),
-                aofRewriteBufferSize(),
-                bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC),
+                sdslen(server.aof_buf), //aof缓冲区大小
+                aofRewriteBufferSize(), //aof重写缓冲区大小
+                bioPendingJobsOfType(REDIS_BIO_AOF_FSYNC),//同步aof文件的后台job数
                 server.aof_delayed_fsync);
         }
 
@@ -3250,6 +3250,7 @@ sds genRedisInfoString(char *section) {
     }
 
     /* CPU */
+    //调用getrusage来获得本进程相关的cpu、内存信息
     if (allsections || defsections || !strcasecmp(section,"cpu")) {
         if (sections++) info = sdscat(info,"\r\n");
         info = sdscatprintf(info,
@@ -3296,8 +3297,8 @@ sds genRedisInfoString(char *section) {
         for (j = 0; j < server.dbnum; j++) {
             long long keys, vkeys;
 
-            keys = dictSize(server.db[j].dict);
-            vkeys = dictSize(server.db[j].expires);
+            keys = dictSize(server.db[j].dict); //键值对字典大小
+            vkeys = dictSize(server.db[j].expires);//过期键字典大小
             if (keys || vkeys) {
                 info = sdscatprintf(info,
                     "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n",
@@ -3307,7 +3308,7 @@ sds genRedisInfoString(char *section) {
     }
     return info;
 }
-
+//info命令
 void infoCommand(redisClient *c) {
     char *section = c->argc == 2 ? c->argv[1]->ptr : "default";
 
@@ -3315,11 +3316,11 @@ void infoCommand(redisClient *c) {
         addReply(c,shared.syntaxerr);
         return;
     }
-    sds info = genRedisInfoString(section);
+    sds info = genRedisInfoString(section); 
     addReplySds(c,sdscatprintf(sdsempty(),"$%lu\r\n",
         (unsigned long)sdslen(info)));
-    addReplySds(c,info);
-    addReply(c,shared.crlf);
+    addReplySds(c,info);//添加info到回复中
+    addReply(c,shared.crlf);//添加换行符
 }
 
 void monitorCommand(redisClient *c) {
