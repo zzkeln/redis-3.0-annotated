@@ -3344,33 +3344,24 @@ void monitorCommand(redisClient *c) {
 /* freeMemoryIfNeeded() gets called when 'maxmemory' is set on the config
  * file to limit the max memory used by the server, before processing a
  * command.
- *
  * 此函数在 maxmemory 选项被打开，并且内存超出限制时调用。
- *
  * The goal of the function is to free enough memory to keep Redis under the
  * configured memory limit.
- *
  * 此函数的目的是释放 Redis 的占用内存至 maxmemory 选项设置的最大值之下。
- *
  * The function starts calculating how many bytes should be freed to keep
  * Redis under the limit, and enters a loop selecting the best keys to
  * evict accordingly to the configured policy.
- *
  * 函数先计算出需要释放多少字节才能低于 maxmemory 选项设置的最大值，
  * 然后根据指定的淘汰算法，选出最适合被淘汰的键进行释放。
- *
  * If all the bytes needed to return back under the limit were freed the
  * function returns REDIS_OK, otherwise REDIS_ERR is returned, and the caller
  * should block the execution of commands that will result in more memory
  * used by the server.
- *
  * 如果成功释放了所需数量的内存，那么函数返回 REDIS_OK ，否则函数将返回 REDIS_ERR ，
  * 并阻止执行新的命令。
- *
  * ------------------------------------------------------------------------
  *
  * LRU approximation algorithm
- *
  * Redis uses an approximation of the LRU algorithm that runs in constant
  * memory. Every time there is a key to expire, we sample N keys (with
  * N very small, usually in around 5) to populate a pool of best keys to
@@ -3390,11 +3381,12 @@ void monitorCommand(redisClient *c) {
  * evicted in the whole database. */
 
 /* Create a new eviction pool. */
+//为evictionPoll分配内存
 struct evictionPoolEntry *evictionPoolAlloc(void) {
     struct evictionPoolEntry *ep;
     int j;
 
-    ep = zmalloc(sizeof(*ep)*REDIS_EVICTION_POOL_SIZE);
+    ep = zmalloc(sizeof(*ep)*REDIS_EVICTION_POOL_SIZE);//16个元素
     for (j = 0; j < REDIS_EVICTION_POOL_SIZE; j++) {
         ep[j].idle = 0;
         ep[j].key = NULL;
@@ -3426,6 +3418,7 @@ void evictionPoolPopulate(dict *sampledict, dict *keydict, struct evictionPoolEn
     }
 
 #if 1 /* Use bulk get by default. */
+    //从sampledict随机获取16个元素放入samples中
     count = dictGetRandomKeys(sampledict,samples,server.maxmemory_samples);
 #else
     count = server.maxmemory_samples;
@@ -3443,9 +3436,9 @@ void evictionPoolPopulate(dict *sampledict, dict *keydict, struct evictionPoolEn
         /* If the dictionary we are sampling from is not the main
          * dictionary (but the expires one) we need to lookup the key
          * again in the key dictionary to obtain the value object. */
-        if (sampledict != keydict) de = dictFind(keydict, key);
+        if (sampledict != keydict) de = dictFind(keydict, key); //获得key对应的value
         o = dictGetVal(de);
-        idle = estimateObjectIdleTime(o);
+        idle = estimateObjectIdleTime(o);//获得对象o的idle时长
 
         /* Insert the element inside the pool.
          * First, find the first empty bucket or the first populated
@@ -3517,6 +3510,7 @@ int freeMemoryIfNeeded(void) {
     if (mem_used <= server.maxmemory) return REDIS_OK;
 
     // 如果占用内存比 maxmemory 要大，但是 maxmemory 策略为不淘汰，那么直接返回
+    //无淘汰策略的话直接返回
     if (server.maxmemory_policy == REDIS_MAXMEMORY_NO_EVICTION)
         return REDIS_ERR; /* We need to free memory, but policy forbids. */
 
@@ -3539,7 +3533,7 @@ int freeMemoryIfNeeded(void) {
             dictEntry *de;
             redisDb *db = server.db+j;
             dict *dict;
-
+            //lru淘汰或者随机淘汰策略
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM)
             {
@@ -3688,7 +3682,7 @@ void linuxOvercommitMemoryWarning(void) {
     }
 }
 #endif /* __linux__ */
-
+//创建进程文件，文件名是进程号
 void createPidFile(void) {
     /* Try to write the pid file in a best-effort way. */
     FILE *fp = fopen(server.pidfile,"w");
@@ -3697,7 +3691,7 @@ void createPidFile(void) {
         fclose(fp);
     }
 }
-
+//让进程daemonize？
 void daemonize(void) {
     int fd;
 
@@ -3809,6 +3803,7 @@ int checkForSentinelMode(int argc, char **argv) {
 }
 
 /* Function called at startup to load RDB or AOF file in memory. */
+//服务启动时载入aof文件或rdb文件，先载入aof文件，然后载入rdb文件（如果aof文件不存在）
 void loadDataFromDisk(void) {
     // 记录开始时间
     long long start = ustime();
