@@ -2216,37 +2216,37 @@ void resetCommandTableStats(void) {
 }
 
 /* ========================== Redis OP Array API ============================ */
-
+//初始化redisOpArray，设置ops为空
 void redisOpArrayInit(redisOpArray *oa) {
     oa->ops = NULL;
     oa->numops = 0;
 }
-
+//新增一个redisOp
 int redisOpArrayAppend(redisOpArray *oa, struct redisCommand *cmd, int dbid,
                        robj **argv, int argc, int target)
 {
     redisOp *op;
-
+    //多分配一个redisOp出来
     oa->ops = zrealloc(oa->ops,sizeof(redisOp)*(oa->numops+1));
-    op = oa->ops+oa->numops;
+    op = oa->ops+oa->numops;//指向多分配出来的redisOp
     op->cmd = cmd;
     op->dbid = dbid;
     op->argv = argv;
     op->argc = argc;
     op->target = target;
-    oa->numops++;
+    oa->numops++; //增加redisOp个数
     return oa->numops;
 }
-
+//释放整个redisOpArray
 void redisOpArrayFree(redisOpArray *oa) {
     while(oa->numops) {
         int j;
         redisOp *op;
 
         oa->numops--;
-        op = oa->ops+oa->numops;
+        op = oa->ops+oa->numops;//指向某个redisOp
         for (j = 0; j < op->argc; j++)
-            decrRefCount(op->argv[j]);
+            decrRefCount(op->argv[j]);//释放其中的参数对象
         zfree(op->argv);
     }
     zfree(oa->ops);
@@ -2254,15 +2254,14 @@ void redisOpArrayFree(redisOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-/*
- * 根据给定命令名字（SDS），查找命令
+/*根据给定命令名字（SDS），查找命令。从server.commands词典中查找命令
  */
 struct redisCommand *lookupCommand(sds name) {
     return dictFetchValue(server.commands, name);
 }
 
 /*
- * 根据给定命令名字（C 字符串），查找命令
+ * 根据给定命令名字（C 字符串），查找命令。从server.commands词典中查找命令
  */
 struct redisCommand *lookupCommandByCString(char *s) {
     struct redisCommand *cmd;
@@ -2276,23 +2275,19 @@ struct redisCommand *lookupCommandByCString(char *s) {
 /* Lookup the command in the current table, if not found also check in
  * the original table containing the original command names unaffected by
  * redis.conf rename-command statement.
- *
  * 从当前命令表 server.commands 中查找给定名字，
  * 如果没找到的话，就尝试从 server.orig_commands 中查找未被改名的原始名字
  * 原始表中的命令名不受 redis.conf 中命令改名的影响
- *
  * This is used by functions rewriting the argument vector such as
  * rewriteClientCommandVector() in order to set client->cmd pointer
  * correctly even if the command was renamed. 
- *
  * 这个函数可以在命令被更名之后，仍然在重写命令时得出正确的名字。
  */
 struct redisCommand *lookupCommandOrOriginal(sds name) {
-
     // 查找当前表
     struct redisCommand *cmd = dictFetchValue(server.commands, name);
 
-    // 如果有需要的话，查找原始表
+    // 如果当前表没找到的话，从原始表中查找
     if (!cmd) cmd = dictFetchValue(server.orig_commands,name);
 
     return cmd;
@@ -2300,25 +2295,21 @@ struct redisCommand *lookupCommandOrOriginal(sds name) {
 
 /* Propagate the specified command (in the context of the specified database id)
  * to AOF and Slaves.
- *
  * 将指定命令（以及执行该命令的上下文，比如数据库 id 等信息）传播到 AOF 和 slave 。
- *
  * flags are an xor between:
  * FLAG 可以是以下标识的 xor ：
- *
  * + REDIS_PROPAGATE_NONE (no propagation of command at all)
  *   不传播
- *
  * + REDIS_PROPAGATE_AOF (propagate into the AOF file if is enabled)
  *   传播到 AOF
- *
  * + REDIS_PROPAGATE_REPL (propagate into the replication link)
  *   传播到 slave
  */
+//将命令传播到aof和slave中
 void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                int flags)
 {
-    // 传播到 AOF
+    // 传播到 AOF：添加到aof缓冲区中，如果正在bgrewriteaof，那么也将命令追加到aof重写缓存中
     if (server.aof_state != REDIS_AOF_OFF && flags & REDIS_PROPAGATE_AOF)
         feedAppendOnlyFile(cmd,dbid,argv,argc);
 
@@ -2329,6 +2320,7 @@ void propagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 
 /* Used inside commands to schedule the propagation of additional commands
  * after the current command is propagated to AOF / Replication. */
+//将命令添加到server.also_propagate中
 void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
                    int target)
 {
@@ -2338,6 +2330,7 @@ void alsoPropagate(struct redisCommand *cmd, int dbid, robj **argv, int argc,
 /* It is possible to call the function forceCommandPropagation() inside a
  * Redis command implementaiton in order to to force the propagation of a
  * specific command execution into AOF / Replication. */
+//添加传播到aof和replication的标记
 void forceCommandPropagation(redisClient *c, int flags) {
     if (flags & REDIS_PROPAGATE_REPL) c->flags |= REDIS_FORCE_REPL;
     if (flags & REDIS_PROPAGATE_AOF) c->flags |= REDIS_FORCE_AOF;
