@@ -3402,6 +3402,7 @@ struct evictionPoolEntry *evictionPoolAlloc(void) {
  * We insert keys on place in ascending order, so keys with the smaller
  * idle time are on the left, and keys with the higher idle time on the
  * right. */
+//pool中的idle time从左到右 按照升序排列，左边的idle time小，右边的idle time大
 
 #define EVICTION_SAMPLES_ARRAY_SIZE 16
 void evictionPoolPopulate(dict *sampledict, dict *keydict, struct evictionPoolEntry *pool) {
@@ -3424,7 +3425,8 @@ void evictionPoolPopulate(dict *sampledict, dict *keydict, struct evictionPoolEn
     count = server.maxmemory_samples;
     for (j = 0; j < count; j++) samples[j] = dictGetRandomKey(sampledict);
 #endif
-
+    
+    //遍历随机取出的count个键
     for (j = 0; j < count; j++) {
         unsigned long long idle;
         sds key;
@@ -3432,50 +3434,60 @@ void evictionPoolPopulate(dict *sampledict, dict *keydict, struct evictionPoolEn
         dictEntry *de;
 
         de = samples[j];
-        key = dictGetKey(de);
+        key = dictGetKey(de); //随机取出的键
         /* If the dictionary we are sampling from is not the main
          * dictionary (but the expires one) we need to lookup the key
          * again in the key dictionary to obtain the value object. */
         if (sampledict != keydict) de = dictFind(keydict, key); //获得key对应的value
-        o = dictGetVal(de);
+        o = dictGetVal(de);//对应的value
         idle = estimateObjectIdleTime(o);//获得对象o的idle时长
 
         /* Insert the element inside the pool.
          * First, find the first empty bucket or the first populated
          * bucket that has an idle time smaller than our idle time. */
         k = 0;
+        //poll里的元素都按照idle时间从小到大排列好了，对于当前键的idle，需要在pool中找个空位置，
+        //或者在pool里找个比当前idle大的元素。就是当前键要替代pool里最小的idle time的键。
+        //例如pool中从左到右的idle time分别是2,4,6，8,10，当前键idle time是7，那么需要把2给去掉
+        //然后将7插入合适的位置，之后pool变成4,6,7,8,10
         while (k < REDIS_EVICTION_POOL_SIZE &&
                pool[k].key &&
                pool[k].idle < idle) k++;
+        //如果k==0并且poll里最后一个位置也有key，说明idle比pool里所有元素的idle都小，当前键不满足要求
         if (k == 0 && pool[REDIS_EVICTION_POOL_SIZE-1].key != NULL) {
             /* Can't insert if the element is < the worst element we have
              * and there are no empty buckets. */
             continue;
         } else if (k < REDIS_EVICTION_POOL_SIZE && pool[k].key == NULL) {
+            //k的位置是空的，那么可以将当前键插入k位置处
             /* Inserting into empty position. No setup needed before insert. */
         } else {
             /* Inserting in the middle. Now k points to the first element
              * greater than the element to insert.  */
+            //此时k位置处有元素，并且此元素的idle大于当前键的idle，需要把当前键放入k位置处
+            
+            //如果右边还有空间，那么将pool+k到末尾的元素往后移一位，然后k位置处放入当前键
             if (pool[REDIS_EVICTION_POOL_SIZE-1].key == NULL) {
                 /* Free space on the right? Insert at k shifting
                  * all the elements from k to end to the right. */
                 memmove(pool+k+1,pool+k,
                     sizeof(pool[0])*(REDIS_EVICTION_POOL_SIZE-k-1));
             } else {
+                //右边没有空间的，那么k到末尾不动，把最左边的元素给干掉
                 /* No free space on right? Insert at k-1 */
                 k--;
                 /* Shift all elements on the left of k (included) to the
                  * left, so we discard the element with smaller idle time. */
-                sdsfree(pool[0].key);
-                memmove(pool,pool+1,sizeof(pool[0])*k);
+                sdsfree(pool[0].key);//干掉最左边的元素
+                memmove(pool,pool+1,sizeof(pool[0])*k);//将pool+1到k-1的元素左移一位，把k位置空出来
             }
         }
-        pool[k].key = sdsdup(key);
+        pool[k].key = sdsdup(key);//将当前键放入k位置处
         pool[k].idle = idle;
     }
     if (samples != _samples) zfree(samples);
 }
-
+//如果超过maxmemory，尝试淘汰一些内存
 int freeMemoryIfNeeded(void) {
     size_t mem_used, mem_tofree, mem_freed;
     int slaves = listLength(server.slaves);
@@ -3526,13 +3538,13 @@ int freeMemoryIfNeeded(void) {
     while (mem_freed < mem_tofree) {
         int j, k, keys_freed = 0;
 
-        // 遍历所有字典
+        // 遍历所有数据库
         for (j = 0; j < server.dbnum; j++) {
             long bestval = 0; /* just to prevent warning */
-            sds bestkey = NULL;
+            sds bestkey = NULL;//要淘汰的键
             dictEntry *de;
             redisDb *db = server.db+j;
-            dict *dict;
+            dict *dict; //基于什么字典来淘汰键
             //lru淘汰或者随机淘汰策略
             if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_RANDOM)
@@ -3555,12 +3567,13 @@ int freeMemoryIfNeeded(void) {
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_RANDOM)
             {
                 de = dictGetRandomKey(dict);
-                bestkey = dictGetKey(de);
+                bestkey = dictGetKey(de); //随机选出要淘汰的键
             }
 
             /* volatile-lru and allkeys-lru policy */
             // 如果使用的是 LRU 策略，
             // 那么从一集 sample 键中选出 IDLE 时间最长的那个键
+            //这个要干掉的元素未必过期，只是采样的samples中的idle time是最大的
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_ALLKEYS_LRU ||
                 server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_LRU)
             {
@@ -3569,15 +3582,18 @@ int freeMemoryIfNeeded(void) {
                 while(bestkey == NULL) {
                     evictionPoolPopulate(dict, db->dict, db->eviction_pool);
                     /* Go backward from best to worst element to evict. */
+                    //pool中元素从左到右的idle time递增，从右向左遍历，干掉idle time大的键值对
+                    //从右向左遍历，找到第一个不为空的元素作为候选bestkey
+                    //注意这里选出的bestkey未必过期了，只是采样samples的元素中是idle time是最大的
                     for (k = REDIS_EVICTION_POOL_SIZE-1; k >= 0; k--) {
                         if (pool[k].key == NULL) continue;
                         de = dictFind(dict,pool[k].key);
 
                         /* Remove the entry from the pool. */
-                        sdsfree(pool[k].key);
+                        sdsfree(pool[k].key);//从pool中移除元素
                         /* Shift all elements on its right to left. */
                         memmove(pool+k,pool+k+1,
-                            sizeof(pool[0])*(REDIS_EVICTION_POOL_SIZE-k-1));
+                            sizeof(pool[0])*(REDIS_EVICTION_POOL_SIZE-k-1));//将右边所有元素左移一位
                         /* Clear the element on the right which is empty
                          * since we shifted one position to the left.  */
                         pool[REDIS_EVICTION_POOL_SIZE-1].key = NULL;
@@ -3597,18 +3613,21 @@ int freeMemoryIfNeeded(void) {
             }
 
             /* volatile-ttl */
+            //ttl：那么从过期键字典中选取键进行淘汰
             // 策略为 volatile-ttl ，从一集 sample 键中选出过期时间距离当前时间最接近的键
+            //注意：选出来的键可能并未过期，只是采样的samples中最快过期的那个键
             else if (server.maxmemory_policy == REDIS_MAXMEMORY_VOLATILE_TTL) {
                 for (k = 0; k < server.maxmemory_samples; k++) {
                     sds thiskey;
                     long thisval;
 
-                    de = dictGetRandomKey(dict);
+                    de = dictGetRandomKey(dict); //从过期键字典中随机选取键进行淘汰
                     thiskey = dictGetKey(de);
-                    thisval = (long) dictGetVal(de);
+                    thisval = (long) dictGetVal(de);//获得过期时间
 
                     /* Expire sooner (minor expire unix timestamp) is better
                      * candidate for deletion */
+                    //如果thisval的过期到达时间小于bestval，那么更新bestkey
                     if (bestkey == NULL || thisval < bestval) {
                         bestkey = thiskey;
                         bestval = thisval;
@@ -3617,12 +3636,12 @@ int freeMemoryIfNeeded(void) {
             }
 
             /* Finally remove the selected key. */
-            // 删除被选中的键
+            // 删除被选中的键，bestkey就是要淘汰的键
             if (bestkey) {
                 long long delta;
 
                 robj *keyobj = createStringObject(bestkey,sdslen(bestkey));
-                propagateExpire(db,keyobj);
+                propagateExpire(db,keyobj);//传播过期键删除到aof和slave
                 /* We compute the amount of memory freed by dbDelete() alone.
                  * It is possible that actually the memory needed to propagate
                  * the DEL in AOF and replication link is greater than the one
