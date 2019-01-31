@@ -3868,7 +3868,7 @@ int main(int argc, char **argv) {
     // 检查服务器是否以 Sentinel 模式启动
     server.sentinel_mode = checkForSentinelMode(argc,argv);
 
-    // 初始化服务器
+    // 初始化服务器，用配置来设置各种参数
     initServerConfig();
 
     /* We need to init sentinel right now as parsing the configuration file
@@ -3995,7 +3995,7 @@ int main(int argc, char **argv) {
     }
 
     // 运行事件处理器，一直到服务器关闭为止
-    aeSetBeforeSleepProc(server.el,beforeSleep);
+    aeSetBeforeSleepProc(server.el,beforeSleep);//设置before-sleep的函数，每次epoll_wait前会调用这个函数
     aeMain(server.el);
 
     // 服务器关闭，停止事件循环
