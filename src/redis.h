@@ -1102,13 +1102,13 @@ struct redisServer {
     // 主服务器发送 PING 的频率
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
 
-    // backlog 本身，复制积压缓冲区
+    // backlog 本身，复制积压缓冲区，是一个环形数组
     char *repl_backlog;             /* Replication backlog for partial syncs */
     // backlog 的长度，默认大小是1MB
     long long repl_backlog_size;    /* Backlog circular buffer size */
     // backlog 中数据的长度
     long long repl_backlog_histlen; /* Backlog actual data length */
-    // backlog 的当前索引
+    // backlog 的当前索引，[0...idx]大小是最新的数据，[idx...end]是旧的数据，新数据要写入复制积压缓冲区时，往idx...end写，然后更新idx
     long long repl_backlog_idx;     /* Backlog circular buffer current offset */
     // backlog 中可以被还原的第一个字节的偏移量
     long long repl_backlog_off;     /* Replication offset of first byte in the
