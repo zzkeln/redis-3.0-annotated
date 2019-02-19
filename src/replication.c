@@ -193,7 +193,7 @@ void feedReplicationBacklogWithObject(robj *o) {
 
 // 将传入的参数发送给从服务器
 // 操作分为三步：
-// 1） 构建协议内容
+// 1） 按照格式构建协议内容：aof文件的格式
 // 2） 将协议内容备份到 backlog
 // 3） 将内容发送给各个从服务器
 void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
@@ -204,10 +204,11 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
     /* If there aren't slaves, and there is no backlog buffer to populate,
      * we can return ASAP. */
-    // backlog 为空，且没有从服务器，直接返回
+    // backlog 为空（说明无需backlog），且没有从服务器(没必要传播)，直接返回
     if (server.repl_backlog == NULL && listLength(slaves) == 0) return;
 
     /* We can't have slaves attached and no backlog. */
+    //如果有slave但没有backlog，这种情况直接fail
     redisAssert(!(listLength(slaves) != 0 && server.repl_backlog == NULL));
 
     /* Send SELECT command to every slave if needed. */
@@ -216,12 +217,14 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         robj *selectcmd;
 
         /* For a few DBs we have pre-computed SELECT command. */
+        //如果0<=dictid<=10，那么select命令已经提前创建好了，直接使用
         if (dictid >= 0 && dictid < REDIS_SHARED_SELECT_CMDS) {
             selectcmd = shared.select[dictid];
         } else {
             int dictid_len;
-
+            //dictid应该在11-16直接，长度应该是2
             dictid_len = ll2string(llstr,sizeof(llstr),dictid);
+            //拼成select命令。格式也是aof文本格式
             selectcmd = createObject(REDIS_STRING,
                 sdscatprintf(sdsempty(),
                 "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n",
@@ -234,32 +237,33 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
 
         /* Send it to slaves. */
         // 发送给所有从服务器
-        listRewind(slaves,&li);
+        listRewind(slaves,&li);//准备遍历slaves链表
         while((ln = listNext(&li))) {
-            redisClient *slave = ln->value;
-            addReply(slave,selectcmd);
+            redisClient *slave = ln->value;//获得slave对应的redisClient
+            addReply(slave,selectcmd);//将select命令发送给slave
         }
-
+        //dictid在11-16之间，对创建的对象引用计数减1
         if (dictid < 0 || dictid >= REDIS_SHARED_SELECT_CMDS)
-            decrRefCount(selectcmd);
+            decrRefCount(selectcmd); 
     }
-
+    //设置最近一次的db
     server.slaveseldb = dictid;
 
     /* Write the command to the replication backlog if any. */
-    // 将命令写入到backlog
+    // 将命令写入到backlog。命令格式是例如这样的 “*3\r\n$3\r\nSET\r\n$key_len\r\nKEY\r\n$val_len\r\nVALUE\r\n"
     if (server.repl_backlog) {
-        char aux[REDIS_LONGSTR_SIZE+3];
+        char aux[REDIS_LONGSTR_SIZE+3];//char aux[24]字节，够放一个long数字了
 
         /* Add the multi bulk reply length. */
+        //将*argc\r\n放入aux
         aux[0] = '*';
         len = ll2string(aux+1,sizeof(aux)-1,argc);
         aux[len+1] = '\r';
         aux[len+2] = '\n';
-        feedReplicationBacklog(aux,len+3);
+        feedReplicationBacklog(aux,len+3);//将aux加到backlog中
 
         for (j = 0; j < argc; j++) {
-            long objlen = stringObjectLen(argv[j]);
+            long objlen = stringObjectLen(argv[j]);//每个参数的长度
 
             /* We need to feed the buffer with the object as a bulk reply
              * not just as a plain string, so create the $..CRLF payload len 
@@ -269,17 +273,18 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
             len = ll2string(aux+1,sizeof(aux)-1,objlen);
             aux[len+1] = '\r';
             aux[len+2] = '\n';
-            feedReplicationBacklog(aux,len+3);
-            feedReplicationBacklogWithObject(argv[j]);
-            feedReplicationBacklog(aux+len+1,2);
+            feedReplicationBacklog(aux,len+3);//将$长度\r\n加入backlog中
+            feedReplicationBacklogWithObject(argv[j]);//将对象加入backlog中
+            feedReplicationBacklog(aux+len+1,2);//将\r\n加入backlog中
         }
     }
 
     /* Write the command to every slave. */
+    //遍历每个slave
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
 
-        // 指向从服务器
+        // 指向从服务器的redisClient
         redisClient *slave = ln->value;
 
         /* Don't feed slaves that are still waiting for BGSAVE to start */
@@ -294,10 +299,12 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
         // 那么在初次 SYNC 完成之前，主服务器发送的内容会被放进一个缓冲区里面
 
         /* Add the multi bulk length. */
+        //发送argc给slave
         addReplyMultiBulkLen(slave,argc);
 
         /* Finally any additional argument that was not stored inside the
          * static buffer if any (from j to argc). */
+        //发送每个参数给slave：按照aof文件格式发送给slave
         for (j = 0; j < argc; j++)
             addReplyBulk(slave,argv[j]);
     }
@@ -353,7 +360,7 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
     long long j, skip, len;
 
     redisLog(REDIS_DEBUG, "[PSYNC] Slave request offset: %lld", offset);
-
+    //backlog中数据为空，不用发送直接返回
     if (server.repl_backlog_histlen == 0) {
         redisLog(REDIS_DEBUG, "[PSYNC] Backlog history len is zero");
         return 0;
@@ -369,17 +376,22 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
              server.repl_backlog_idx);
 
     /* Compute the amount of bytes we need to discard. */
-    skip = offset - server.repl_backlog_off;
+    ////repl_backlog_off记录backlog中可用于还原的第一个字节的偏移量, offset表示需要的返回的偏移量，skip就是Backlog中需要跳过的偏移量
+    skip = offset - server.repl_backlog_off; 
     redisLog(REDIS_DEBUG, "[PSYNC] Skipping: %lld", skip);
 
     /* Point j to the oldest byte, that is actaully our
      * server.repl_backlog_off byte. */
+    //j指向backlog中最老的字节，也就是repl_backlog_off指向的字节。常态下，backlog的数组应该是这样的
+    //0...idx xxxx old...end，其中old是最老字节，old...end是老的数据，0...idx是新的数据，idx+end-old就是真实数据长度即backlog_histlen
+    //的大小，repl_backlog_size-repl_backlog_histlen就是idx...old的长度，加上idx就指向了old
     j = (server.repl_backlog_idx +
         (server.repl_backlog_size-server.repl_backlog_histlen)) %
         server.repl_backlog_size;
     redisLog(REDIS_DEBUG, "[PSYNC] Index of first byte: %lld", j);
 
     /* Discard the amount of data to seek to the specified 'offset'. */
+    //忽略skip个字节
     j = (j + skip) % server.repl_backlog_size;
 
     /* Feed slave with data. Since it is a circular buffer we have to
@@ -392,6 +404,7 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
             (server.repl_backlog_size - j) : len;
 
         redisLog(REDIS_DEBUG, "[PSYNC] addReply() length: %lld", thislen);
+        //将数据添加到redisClient的回复中
         addReplySds(c,sdsnewlen(server.repl_backlog + j, thislen));
         len -= thislen;
         j = 0;
@@ -401,10 +414,9 @@ long long addReplyReplicationBacklog(redisClient *c, long long offset) {
 
 /* This function handles the PSYNC command from the point of view of a
  * master receiving a request for partial resynchronization.
- *
  * On success return REDIS_OK, otherwise REDIS_ERR is returned and we proceed
  * with the usual full resync. */
-// 尝试进行部分 resync ，成功返回 REDIS_OK ，失败返回 REDIS_ERR 。
+// 作为master接收到psync命令，尝试进行部分 resync ，成功返回 REDIS_OK ，失败返回 REDIS_ERR 。
 int masterTryPartialResynchronization(redisClient *c) {
     long long psync_offset, psync_len;
     char *master_runid = c->argv[1]->ptr;
@@ -414,7 +426,7 @@ int masterTryPartialResynchronization(redisClient *c) {
     /* Is the runid of this master the same advertised by the wannabe slave
      * via PSYNC? If runid changed this master is a different instance and
      * there is no way to continue. */
-    // 检查 master id 是否和 runid 一致，只有一致的情况下才有 PSYNC 的可能
+    // 检查 master id 是否和 runid 一致，只有一致的情况下才有 PSYNC 的可能。如果不一致，进行full resync
     if (strcasecmp(master_runid, server.runid)) {
         /* Run id "?" is used by slaves that want to force a full resync. */
         // 从服务器提供的 run id 和服务器的 run id 不一致
@@ -431,7 +443,7 @@ int masterTryPartialResynchronization(redisClient *c) {
     }
 
     /* We still have the data our slave is asking for? */
-    // 取出 psync_offset 参数
+    // 取出 psync_offset 参数，即slave的偏移量
     if (getLongLongFromObjectOrReply(c,c->argv[2],&psync_offset,NULL) !=
        REDIS_OK) goto need_full_resync;
 
@@ -440,7 +452,7 @@ int masterTryPartialResynchronization(redisClient *c) {
         // 或者 psync_offset 小于 server.repl_backlog_off
         // （想要恢复的那部分数据已经被覆盖）
         psync_offset < server.repl_backlog_off ||
-        // psync offset 大于 backlog 所保存的数据的偏移量
+        // psync offset 大于 backlog 所保存的数据的偏移量（这种情况啥时会出现？）
         psync_offset > (server.repl_backlog_off + server.repl_backlog_histlen))
     {
         // 执行 FULL RESYNC
@@ -455,13 +467,10 @@ int masterTryPartialResynchronization(redisClient *c) {
 
     /* If we reached this point, we are able to perform a partial resync:
      * 程序运行到这里，说明可以执行 partial resync
-     *
      * 1) Set client state to make it a slave.
      *    将客户端状态设为 salve  
-     *
      * 2) Inform the client we can continue with +CONTINUE
      *    向 slave 发送 +CONTINUE ，表示 partial resync 的请求被接受
-     *
      * 3) Send the backlog data (from the offset to the end) to the slave. 
      *    发送 backlog 中，客户端所需要的数据
      */
@@ -472,6 +481,7 @@ int masterTryPartialResynchronization(redisClient *c) {
     /* We can't use the connection buffers since they are used to accumulate
      * new commands at this stage. But we are sure the socket send buffer is
      * emtpy so this write will never fail actually. */
+    //todo：这段解释是啥意思？
     // 向从服务器发送一个同步 +CONTINUE ，表示 PSYNC 可以执行
     buflen = snprintf(buf,sizeof(buf),"+CONTINUE\r\n");
     if (write(c->fd,buf,buflen) != buflen) {
@@ -492,7 +502,8 @@ int masterTryPartialResynchronization(redisClient *c) {
 
 need_full_resync:
     /* We need a full resync for some reason... notify the client. */
-    // 刷新 psync_offset
+    //这里执行全同步：
+    // 刷新 psync_offset等于master的偏移量
     psync_offset = server.master_repl_offset;
     /* Add 1 to psync_offset if it the replication backlog does not exists
      * as when it will be created later we'll increment the offset by one. */
@@ -510,6 +521,7 @@ need_full_resync:
 }
 
 /* SYNC ad PSYNC command implemenation. */
+//sync和psync的命令实现
 void syncCommand(redisClient *c) {
 
     /* ignore SYNC if already slave or in monitor mode */
@@ -528,7 +540,7 @@ void syncCommand(redisClient *c) {
      * the client about already issued commands. We need a fresh reply
      * buffer registering the differences between the BGSAVE and the current
      * dataset, so that we can copy to other slaves if needed. */
-    // 在客户端仍有输出数据等待输出，不能 SYNC
+    // 在客户端仍有输出数据等待输出，不能 SYNC。即客户端仍然有回复没有发送到客户端，那么不能sync（因为共用相同的回复reply？）
     if (listLength(c->reply) != 0 || c->bufpos != 0) {
         addReplyError(c,"SYNC and PSYNC are invalid with pending output");
         return;
@@ -538,21 +550,19 @@ void syncCommand(redisClient *c) {
 
     /* Try a partial resynchronization if this is a PSYNC command.
      * 如果这是一个 PSYNC 命令，那么尝试 partial resynchronization 。
-     *
      * If it fails, we continue with usual full resynchronization, however
      * when this happens masterTryPartialResynchronization() already
      * replied with:
-     *
      * 如果失败，那么使用 full resynchronization ，
      * 在这种情况下， masterTryPartialResynchronization() 返回以下内容：
      *
      * +FULLRESYNC <runid> <offset>
-     *
-     * So the slave knows the new runid and offset to try a PSYNC later
+
+    * So the slave knows the new runid and offset to try a PSYNC later
      * if the connection with the master is lost. 
-     *
      * 这样的话，之后如果主服务器断开，那么从服务器就可以尝试 PSYNC 了。
      */
+    //如果是psync请求
     if (!strcasecmp(c->argv[0]->ptr,"psync")) {
         // 尝试进行 PSYNC
         if (masterTryPartialResynchronization(c) == REDIS_OK) {
@@ -578,7 +588,7 @@ void syncCommand(redisClient *c) {
     }
 
     // 以下是完整重同步的情况。。。
-
+    
     /* Full resynchronization. */
     // 执行 full resynchronization ，增加计数
     server.stat_sync_full++;
@@ -590,6 +600,7 @@ void syncCommand(redisClient *c) {
         /* Ok a background save is in progress. Let's check if it is a good
          * one for replication, i.e. if there is another slave that is
          * registering differences since the server forked to save */
+        //如果有rdb子进程在进行save rdb
         redisClient *slave;
         listNode *ln;
         listIter li;
@@ -602,10 +613,11 @@ void syncCommand(redisClient *c) {
             if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_END) break;
         }
 
+        //说明有slave在等待bgsave完成
         if (ln) {
             /* Perfect, the server is already registering differences for
              * another slave. Set the right state, and copy the buffer. */
-            // 幸运的情况，可以使用目前 BGSAVE 所生成的 RDB
+            // 幸运的情况，可以使用目前 BGSAVE 所生成的 RDB。将slave的回复reply和buf拷贝到c中
             copyClientOutputBuffer(c,slave);
             c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
             redisLog(REDIS_NOTICE,"Waiting for end of BGSAVE for SYNC");
@@ -620,12 +632,13 @@ void syncCommand(redisClient *c) {
         /* Ok we don't have a BGSAVE in progress, let's start one */
         // 没有 BGSAVE 在进行，开始一个新的 BGSAVE
         redisLog(REDIS_NOTICE,"Starting BGSAVE for SYNC");
+        //开始一个bgsave
         if (rdbSaveBackground(server.rdb_filename) != REDIS_OK) {
             redisLog(REDIS_NOTICE,"Replication failed, can't BGSAVE");
             addReplyError(c,"Unable to perform background save");
             return;
         }
-        // 设置状态
+        // 设置状态为bgsave_end
         c->replstate = REDIS_REPL_WAIT_BGSAVE_END;
         /* Flush the script cache for the new slave. */
         // 因为新 slave 进入，刷新复制脚本缓存
@@ -641,7 +654,7 @@ void syncCommand(redisClient *c) {
 
     server.slaveseldb = -1; /* Force to re-emit the SELECT command. */
 
-    // 添加到 slave 列表中
+    // 添加c到 slave 列表中
     listAddNodeTail(server.slaves,c);
     // 如果是第一个 slave ，那么初始化 backlog
     if (listLength(server.slaves) == 1 && server.repl_backlog == NULL)
@@ -652,7 +665,6 @@ void syncCommand(redisClient *c) {
 /* REPLCONF <option> <value> <option> <value> ...
  * This command is used by a slave in order to configure the replication
  * process before starting it with the SYNC command.
- *
  * 由 slave 使用，在 SYNC 之前配置复制进程（process）
  *
  * Currently the only use of this command is to communicate to the master
@@ -666,7 +678,6 @@ void syncCommand(redisClient *c) {
  * In the future the same command can be used in order to configure
  * the replication to initiate an incremental replication instead of a
  * full resync. 
- *
  * 将来可能会用这个命令来实现增量式复制，取代 full resync 。
  */
 void replconfCommand(redisClient *c) {
