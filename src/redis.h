@@ -1102,9 +1102,9 @@ struct redisServer {
     // 主服务器发送 PING 的频率
     int repl_ping_slave_period;     /* Master pings the slave every N seconds */
 
-    // backlog 本身
+    // backlog 本身，复制积压缓冲区
     char *repl_backlog;             /* Replication backlog for partial syncs */
-    // backlog 的长度
+    // backlog 的长度，默认大小是1MB
     long long repl_backlog_size;    /* Backlog circular buffer size */
     // backlog 中数据的长度
     long long repl_backlog_histlen; /* Backlog actual data length */
