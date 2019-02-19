@@ -45,12 +45,11 @@ void replicationSendAck(void);
 
 /* ---------------------------------- MASTER -------------------------------- */
 
-// 创建 backlog
+// 创建 backlog，创建复制积压缓冲区
 void createReplicationBacklog(void) {
-
     redisAssert(server.repl_backlog == NULL);
 
-    // backlog
+    // backlog分配内存，1MB大小
     server.repl_backlog = zmalloc(server.repl_backlog_size);
     // 数据长度
     server.repl_backlog_histlen = 0;
@@ -62,7 +61,7 @@ void createReplicationBacklog(void) {
      * master_repl_offset if no backlog exists nor slaves are attached. */
     // 每次创建 backlog 时都将 master_repl_offset 增一
     // 这是为了防止之前使用过 backlog 的从服务器引发错误的 PSYNC 请求
-    server.master_repl_offset++;
+    server.master_repl_offset++;//累加全局复制偏移量
 
     /* We don't have any data inside our buffer, but virtually the first
      * byte we have is the next byte that will be generated for the
@@ -78,16 +77,13 @@ void createReplicationBacklog(void) {
  * it contains the same data as the previous one (possibly less data, but
  * the most recent bytes, or the same data and more free space in case the
  * buffer is enlarged). */
-// 动态调整 backlog 大小
-// 当 backlog 是被扩大时，原有的数据会被保留，
-// 因为分配空间使用的是 realloc
+// 动态调整 backlog 大小，释放旧backlog，然后zmalloc分配新的backlog空间
 void resizeReplicationBacklog(long long newsize) {
-
-    // 不能小于最小大小
+    // 不能小于最小大小16K
     if (newsize < REDIS_REPL_BACKLOG_MIN_SIZE)
         newsize = REDIS_REPL_BACKLOG_MIN_SIZE;
 
-    // 大小和目前大小相等
+    // 大小和目前大小相等，直接返回
     if (server.repl_backlog_size == newsize) return;
 
     // 设置新大小
@@ -111,8 +107,8 @@ void resizeReplicationBacklog(long long newsize) {
 
 // 释放 backlog
 void freeReplicationBacklog(void) {
-    redisAssert(listLength(server.slaves) == 0);
-    zfree(server.repl_backlog);
+    redisAssert(listLength(server.slaves) == 0); //slaves必须不存在了
+    zfree(server.repl_backlog);//释放内存
     server.repl_backlog = NULL;
 }
 
@@ -120,10 +116,13 @@ void freeReplicationBacklog(void) {
  * This function also increments the global replication offset stored at
  * server.master_repl_offset, because there is no case where we want to feed
  * the backlog without incrementing the buffer. 
- *
  * 添加数据到复制 backlog ，
  * 并且按照添加内容的长度更新 server.master_repl_offset 偏移量。
  */
+//在backlog中增加ptr[0...len)数据
+/// backlog是环形数组，idx记录索引，其中[0...idx)是最新的数据，[idx...end]是旧的数据，新数据要写入复制积压缓冲区时，往idx...end写，然后更新idx
+//例如backlog是大小为6的数组，先写入12345后，backlog里是12345x，此时idx指向x，再写入6789后，backlog是789456，此时idx指向4.
+//[0..idx)是最新的数据，[idx...end]是旧数据
 void feedReplicationBacklog(void *ptr, size_t len) {
     unsigned char *p = ptr;
 
@@ -136,22 +135,21 @@ void feedReplicationBacklog(void *ptr, size_t len) {
     while(len) {
         // 从 idx 到 backlog 尾部的字节数
         size_t thislen = server.repl_backlog_size - server.repl_backlog_idx;
-        // 如果 idx 到 backlog 尾部这段空间足以容纳要写入的内容
-        // 那么直接将写入数据长度设为 len
+        // 如果 idx 到 backlog 尾部这段空间足以容纳要写入的内容，那么直接将写入数据长度设为 len
         // 在将这些 len 字节复制之后，这个 while 循环将跳出
         if (thislen > len) thislen = len;
-        // 将 p 中的 thislen 字节内容复制到 backlog
+        // 将 p 中的 thislen 字节内容复制到 backlog的[idx...end]处
         memcpy(server.repl_backlog+server.repl_backlog_idx,p,thislen);
         // 更新 idx ，指向新写入的数据之后
         server.repl_backlog_idx += thislen;
-        // 如果写入达到尾部，那么将索引重置到头部
+        // 如果写入达到尾部，那么将索引重置到头部，因为是环形数组
         if (server.repl_backlog_idx == server.repl_backlog_size)
             server.repl_backlog_idx = 0;
         // 减去已写入的字节数
         len -= thislen;
         // 将指针移动到已被写入数据的后面，指向未被复制数据的开头
         p += thislen;
-        // 增加实际长度
+        // 增加实际数据长度
         server.repl_backlog_histlen += thislen;
     }
     // histlen 的最大值只能等于 backlog_size
@@ -177,20 +175,20 @@ void feedReplicationBacklog(void *ptr, size_t len) {
 
 /* Wrapper for feedReplicationBacklog() that takes Redis string objects
  * as input. */
-// 将 Redis 对象放进 replication backlog 里面
+// 将 Redis 字符串对象放进 replication backlog 里面
 void feedReplicationBacklogWithObject(robj *o) {
     char llstr[REDIS_LONGSTR_SIZE];
     void *p;
     size_t len;
-
+    //int编码的字符串，转换成字符串“1234”这样的形式
     if (o->encoding == REDIS_ENCODING_INT) {
         len = ll2string(llstr,sizeof(llstr),(long)o->ptr);
         p = llstr;
     } else {
-        len = sdslen(o->ptr);
-        p = o->ptr;
+        len = sdslen(o->ptr); //记录字符串长度
+        p = o->ptr;//指向字符串内容
     }
-    feedReplicationBacklog(p,len);
+    feedReplicationBacklog(p,len);//将p[0,len)添加到backlog中
 }
 
 // 将传入的参数发送给从服务器
