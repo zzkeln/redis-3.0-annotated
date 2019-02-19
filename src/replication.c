@@ -847,7 +847,6 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
             startbgsave = 1;
             slave->replstate = REDIS_REPL_WAIT_BGSAVE_END;
         } else if (slave->replstate == REDIS_REPL_WAIT_BGSAVE_END) {
-
             // 执行到这里，说明有 slave 在等待 BGSAVE 完成
 
             struct redis_stat buf;
@@ -869,18 +868,18 @@ void updateSlavesWaitingBgsave(int bgsaveerr) {
             }
 
             // 设置偏移量，各种值
-            slave->repldboff = 0;
-            slave->repldbsize = buf.st_size;
+            slave->repldboff = 0; //已写偏移量为0
+            slave->repldbsize = buf.st_size;//rdb文件大小
             // 更新状态
             slave->replstate = REDIS_REPL_SEND_BULK;
-
+            //$文件大小\r\n 格式的字符串
             slave->replpreamble = sdscatprintf(sdsempty(),"$%lld\r\n",
                 (unsigned long long) slave->repldbsize);
 
-            // 清空之前的写事件处理器
+            // 清空之前的写事件处理器：之前的写处理器应该是将reply和buf发送给slave
             aeDeleteFileEvent(server.el,slave->fd,AE_WRITABLE);
             // 将 sendBulkToSlave 安装为 slave 的写事件处理器
-            // 它用于将 RDB 文件发送给 slave
+            // 它用于将 RDB 文件发送给 slave，将write fd来发送rdb文件给slave
             if (aeCreateFileEvent(server.el, slave->fd, AE_WRITABLE, sendBulkToSlave, slave) == AE_ERR) {
                 freeClient(slave);
                 continue;
