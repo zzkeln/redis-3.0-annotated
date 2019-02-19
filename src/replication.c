@@ -740,19 +740,20 @@ void replconfCommand(redisClient *c) {
     addReply(c,shared.ok);
 }
 
-// master 将 RDB 文件发送给 slave 的写事件处理器
+// master 将 RDB 文件发送给 slave 的写事件处理器：调用write每次最多写入16k的数据给slave fd。
+//注意：并没有将数据添加到回复reply或buf中，而是直接通过write fd来写数据的
 void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
-    redisClient *slave = privdata;
+    redisClient *slave = privdata; //将privdata转换成redisClient
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
-    char buf[REDIS_IOBUF_LEN];
+    char buf[REDIS_IOBUF_LEN]; //16k的buf
     ssize_t nwritten, buflen;
 
     /* Before sending the RDB file, we send the preamble as configured by the
      * replication process. Currently the preamble is just the bulk count of
      * the file in the form "$<length>\r\n". */
     if (slave->replpreamble) {
-        nwritten = write(fd,slave->replpreamble,sdslen(slave->replpreamble));
+        nwritten = write(fd,slave->replpreamble,sdslen(slave->replpreamble));//将rdb文件大小先写给fd
         if (nwritten == -1) {
             redisLog(REDIS_VERBOSE,"Write error sending RDB preamble to slave: %s",
                 strerror(errno));
@@ -770,8 +771,9 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     /* If the preamble was already transfered, send the RDB bulk data. */
+    //将rdb文件偏移量移到repldboff处
     lseek(slave->repldbfd,slave->repldboff,SEEK_SET);
-    // 读取 RDB 数据
+    // 从rdb文件的fd中读取 RDB 数据，读取16k字节放入buf中
     buflen = read(slave->repldbfd,buf,REDIS_IOBUF_LEN);
     if (buflen <= 0) {
         redisLog(REDIS_WARNING,"Read error sending DB to slave: %s",
@@ -779,7 +781,7 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
         freeClient(slave);
         return;
     }
-    // 写入数据到 slave
+    // 写入数据到 slave，将buflen长度的buf写入fd中
     if ((nwritten = write(fd,buf,buflen)) == -1) {
         if (errno != EAGAIN) {
             redisLog(REDIS_WARNING,"Write error sending DB to slave: %s",
@@ -790,9 +792,10 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 
     // 如果写入成功，那么更新写入字节数到 repldboff ，等待下次继续写入
+    //repldboff记录rdb文件中已经写个slave fd的字节数
     slave->repldboff += nwritten;
 
-    // 如果写入已经完成
+    // 如果写入已经完成，即写入字节数等于rdb文件大小了
     if (slave->repldboff == slave->repldbsize) {
         // 关闭 RDB 文件描述符
         close(slave->repldbfd);
@@ -819,17 +822,15 @@ void sendBulkToSlave(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 /* This function is called at the end of every background saving.
  * 在每次 BGSAVE 执行完毕之后使用
- *
  * The argument bgsaveerr is REDIS_OK if the background saving succeeded
  * otherwise REDIS_ERR is passed to the function.
  * bgsaveerr 可能是 REDIS_OK 或者 REDIS_ERR ，显示 BGSAVE 的执行结果
- *
  * The goal of this function is to handle slaves waiting for a successful
  * background saving in order to perform non-blocking synchronization. 
- * 
  * 这个函数是在 BGSAVE 完成之后的异步回调函数，
  * 它指导该怎么执行和 slave 相关的 RDB 下一步工作。
  */
+//子进程完成bgsave后，父进程收到信号后会调用这个函数：将rdb文件发送给所有需要rdb文件的slave
 void updateSlavesWaitingBgsave(int bgsaveerr) {
     listNode *ln;
     int startbgsave = 0;
