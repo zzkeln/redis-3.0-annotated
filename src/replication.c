@@ -283,7 +283,6 @@ void replicationFeedSlaves(list *slaves, int dictid, robj **argv, int argc) {
     //遍历每个slave
     listRewind(slaves,&li);
     while((ln = listNext(&li))) {
-
         // 指向从服务器的redisClient
         redisClient *slave = ln->value;
 
