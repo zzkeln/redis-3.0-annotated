@@ -1209,57 +1209,46 @@ void sentinelCallClientReconfScript(sentinelRedisInstance *master, int role, cha
 
 /* Create a redis instance, the following fields must be populated by the
  * caller if needed:
- *
  * 创建一个 Redis 实例，在有需要时，以下两个域需要从调用者提取：
- *
  * runid: set to NULL but will be populated once INFO output is received.
  *        设置为 NULL ，并在接收到 INFO 命令的回复时设置
- *
  * info_refresh: is set to 0 to mean that we never received INFO so far.
  *               如果这个值为 0 ，那么表示我们未收到过 INFO 信息。
- *
  * If SRI_MASTER is set into initial flags the instance is added to
  * sentinel.masters table.
- *
  * 如果 flags 参数为 SRI_MASTER ，
  * 那么这个实例会被添加到 sentinel.masters 表。
- *
  * if SRI_SLAVE or SRI_SENTINEL is set then 'master' must be not NULL and the
  * instance is added into master->slaves or master->sentinels table.
- *
  * 如果 flags 为 SRI_SLAVE 或者 SRI_SENTINEL ，
  * 那么 master 参数不能为 NULL ，
  * SRI_SLAVE 类型的实例会被添加到 master->slaves 表中，
  * 而 SRI_SENTINEL 类型的实例则会被添加到 master->sentinels 表中。
- *
  * If the instance is a slave or sentinel, the name parameter is ignored and
  * is created automatically as hostname:port.
- *
  * 如果实例是从服务器或者 sentinel ，那么 name 参数会被自动忽略，
  * 实例的名字会被自动设置为 hostname:port 。
- *
  * The function fails if hostname can't be resolved or port is out of range.
  * When this happens NULL is returned and errno is set accordingly to the
  * createSentinelAddr() function.
- *
  * 当 hostname 不能被解释，或者超出范围时，函数将失败。
  * 函数将返回 NULL ，并设置 errno 变量，
  * 具体的出错值请参考 createSentinelAddr() 函数。
- *
  * The function may also fail and return NULL with errno set to EBUSY if
  * a master or slave with the same name already exists. 
- *
  * 当相同名字的主服务器或者从服务器已经存在时，函数返回 NULL ，
  * 并将 errno 设为 EBUSY 。
  */
-sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, int quorum, sentinelRedisInstance *master) {
+//创建一个sentinelRedisInstance实例
+sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, 
+                                                   int quorum, sentinelRedisInstance *master) {
     sentinelRedisInstance *ri;
     sentinelAddr *addr;
     dict *table = NULL;
     char slavename[128], *sdsname;
 
-    redisAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL));
-    redisAssert((flags & SRI_MASTER) || master != NULL);
+    redisAssert(flags & (SRI_MASTER|SRI_SLAVE|SRI_SENTINEL)); //必须是master, slave或sentinel的一种
+    redisAssert((flags & SRI_MASTER) || master != NULL); //如果是master，那么master不能为空
 
     /* Check address validity. */
     // 保存 IP 地址和端口号到 addr
@@ -1272,7 +1261,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
         snprintf(slavename,sizeof(slavename),
             strchr(hostname,':') ? "[%s]:%d" : "%s:%d",
             hostname,port);
-        name = slavename;
+        name = slavename; //名字是ip:port
     }
 
     /* Make sure the entry is not duplicated. This may happen when the same
@@ -1293,9 +1282,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
     else if (flags & SRI_SENTINEL) table = master->sentinels;
     sdsname = sdsnew(name);
     if (dictFind(table,sdsname)) {
-
         // 实例已存在，函数直接返回
-
         sdsfree(sdsname);
         errno = EBUSY;
         return NULL;
@@ -1374,18 +1361,14 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
 }
 
 /* Release this instance and all its slaves, sentinels, hiredis connections.
- *
  * 释放一个实例，以及它的所有从服务器、sentinel ，以及 hiredis 连接。
- *
  * This function does not take care of unlinking the instance from the main
  * masters table (if it is a master) or from its master sentinels/slaves table
  * if it is a slave or sentinel. 
- *
  * 如果这个实例是一个从服务器或者 sentinel ，
  * 那么这个函数也会从该实例所属的主服务器表中删除这个从服务器/sentinel 。
  */
 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
-
     /* Release all its slaves or sentinels if any. */
     // 释放（可能有的）sentinel 和 slave
     dictRelease(ri->sentinels);
@@ -1427,7 +1410,7 @@ sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
     key = sdscatprintf(sdsempty(),
         strchr(ip,':') ? "[%s]:%d" : "%s:%d",
         ip,port);
-    slave = dictFetchValue(ri->slaves,key);
+    slave = dictFetchValue(ri->slaves,key);//从ri的从服务器字典中查找ip:port对应的从服务器
     sdsfree(key);
     return slave;
 }
@@ -1443,37 +1426,28 @@ const char *sentinelRedisInstanceTypeStr(sentinelRedisInstance *ri) {
 
 /* This function removes all the instances found in the dictionary of
  * sentinels in the specified 'master', having either:
- * 
  * 1) The same ip/port as specified.
  *    实例给定的 IP 和端口号和字典中已有的实例相同
- *
  * 2) The same runid.
  *    实例给定的运行 ID 和字典中已有的实例相同
- *
  * "1" and "2" don't need to verify at the same time, just one is enough.
- *
  * 以上条件任意满足一个，移除操作就会被执行。
- *
  * If "runid" is NULL it is not checked.
  * Similarly if "ip" is NULL it is not checked.
- *
  * 如果 runid 参数为 NULL ，那么不检查该参数。
  * 如果 ip 参数为 NULL ，那么不检查该参数。
- *
  * This function is useful because every time we add a new Sentinel into
  * a master's Sentinels dictionary, we want to be very sure about not
  * having duplicated instances for any reason. This is important because
  * other sentinels are needed to reach ODOWN quorum, and later to get
  * voted for a given configuration epoch in order to perform the failover.
- *
  * 因为 sentinel 的操作比如故障转移，需要多个 sentinel 投票才能进行。
  * 所以我们必须保证所添加的各个 sentinel 都是不相同、独一无二的，
  * 这样才能确保投票的合法性。
- *
  * The function returns the number of Sentinels removed. 
- *
  * 函数的返回值为被移除 sentinel 的数量
  */
+//从master->sentinels中移除相同ip、port或runid的实例
 int removeMatchingSentinelsFromMaster(sentinelRedisInstance *master, char *ip, int port, char *runid) {
     dictIterator *di;
     dictEntry *de;
@@ -1499,15 +1473,13 @@ int removeMatchingSentinelsFromMaster(sentinelRedisInstance *master, char *ip, i
 /* Search an instance with the same runid, ip and port into a dictionary
  * of instances. Return NULL if not found, otherwise return the instance
  * pointer.
- *
  * 在给定的实例中查找具有相同 runid 、ip 、port 的实例，
  * 没找到则返回 NULL 。
- *
  * runid or ip can be NULL. In such a case the search is performed only
  * by the non-NULL field. 
- *
  * runid 或者 ip 都可以为 NULL ，在这种情况下，函数只检查非空域。
  */
+//从参数instances中查找相同ip,port和runid的实例
 sentinelRedisInstance *getSentinelRedisInstanceByAddrAndRunID(dict *instances, char *ip, int port, char *runid) {
     dictIterator *di;
     dictEntry *de;
@@ -1537,7 +1509,7 @@ sentinelRedisInstance *getSentinelRedisInstanceByAddrAndRunID(dict *instances, c
     return instance;
 }
 
-// 根据名字查找主服务器
+// 根据名字查找主服务器并返回
 /* Master lookup by name */
 sentinelRedisInstance *sentinelGetMasterByName(char *name) {
     sentinelRedisInstance *ri;
@@ -1549,7 +1521,7 @@ sentinelRedisInstance *sentinelGetMasterByName(char *name) {
 }
 
 /* Add the specified flags to all the instances in the specified dictionary. */
-// 为输入的所有实例打开指定的 flags
+// 为参数instances中所有实例打开指定的 flags
 void sentinelAddFlagsToDictOfRedisInstances(dict *instances, int flags) {
     dictIterator *di;
     dictEntry *de;
@@ -1564,7 +1536,7 @@ void sentinelAddFlagsToDictOfRedisInstances(dict *instances, int flags) {
 
 /* Remove the specified flags to all the instances in the specified
  * dictionary. */
-// 从字典中移除所有实例的给定 flags
+// 从参数instances字典中移除所有实例的给定 flags
 void sentinelDelFlagsToDictOfRedisInstances(dict *instances, int flags) {
     dictIterator *di;
     dictEntry *de;
@@ -1580,9 +1552,7 @@ void sentinelDelFlagsToDictOfRedisInstances(dict *instances, int flags) {
 }
 
 /* Reset the state of a monitored master:
- *
  * 重置主服务区的监控状态
- *
  * 1) Remove all slaves.
  *    移除主服务器的所有从服务器
  * 2) Remove all sentinels.
@@ -1596,17 +1566,15 @@ void sentinelDelFlagsToDictOfRedisInstances(dict *instances, int flags) {
  * 6) Disconnect the connections with the master (will reconnect automatically).
  *    断开 sentinel 与主服务器的连接（之后会自动重连）
  */
-
 #define SENTINEL_RESET_NO_SENTINELS (1<<0)
 void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
-
     redisAssert(ri->flags & SRI_MASTER);
 
-    dictRelease(ri->slaves);
-    ri->slaves = dictCreate(&instancesDictType,NULL);
+    dictRelease(ri->slaves); //释放所有slaves
+    ri->slaves = dictCreate(&instancesDictType,NULL);//为slaves创建新的空字典
 
     if (!(flags & SENTINEL_RESET_NO_SENTINELS)) {
-        dictRelease(ri->sentinels);
+        dictRelease(ri->sentinels);//释放所有sentinels
         ri->sentinels = dictCreate(&instancesDictType,NULL);
     }
 
@@ -1665,17 +1633,12 @@ int sentinelResetMastersByPattern(char *pattern, int flags) {
 
 /* Reset the specified master with sentinelResetMaster(), and also change
  * the ip:port address, but take the name of the instance unmodified.
- *
  * 将 master 实例的 IP 和端口号修改成给定的 ip 和 port ，
  * 但保留 master 原来的名字。
- *
  * This is used to handle the +switch-master event.
- *
  * 这个函数用于处理 +switch-master 事件
- *
  * The function returns REDIS_ERR if the address can't be resolved for some
  * reason. Otherwise REDIS_OK is returned.  
- *
  * 函数在无法解释地址时返回 REDIS_ERR ，否则返回 REDIS_OK 。
  */
 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
@@ -1713,7 +1676,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
      * the old master. */
     // 如果新地址和 master 的地址不相同，
     // 将 master 的地址也作为从服务器地址添加到保存了所有从服务器地址的数组中
-    // （这样等于将下线主服务器设置为新主服务器的从服务器）
+    // （这样等于将下线的主服务器设置为新主服务器的从服务器）
     if (!sentinelAddrIsEqual(newaddr,master->addr)) {
         slaves = zrealloc(slaves,sizeof(sentinelAddr*)*(numslaves+1));
         slaves[numslaves++] = createSentinelAddr(master->addr->ip,
@@ -1730,10 +1693,10 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
     master->s_down_since_time = 0;
 
     /* Add slaves back. */
-    // 为实例加回之前保存的所有从服务器
+    // 为实例加回之前保存的所有从服务器？
     for (j = 0; j < numslaves; j++) {
         sentinelRedisInstance *slave;
-
+        //创建出slave，并将它加入到master->slaves中
         slave = createSentinelRedisInstance(NULL,SRI_SLAVE,slaves[j]->ip,
                     slaves[j]->port, master->quorum, master);
 
@@ -1756,14 +1719,15 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
 
 /* Return non-zero if there was no SDOWN or ODOWN error associated to this
  * instance in the latest 'ms' milliseconds. */
-// 如果实例在给定 ms 中没有出现过 SDOWN 或者 ODOWN 状态
-// 那么函数返回一个非零值
+// 如果实例在给定 ms 中没有出现过 SDOWN 或者 ODOWN 状态，那么函数返回一个非零值
 int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
     mstime_t most_recent;
 
     most_recent = ri->s_down_since_time;
     if (ri->o_down_since_time > most_recent)
         most_recent = ri->o_down_since_time;
+    //most_recent记录ODOWN或SDOWN发生并离现在最近的时间点
+    
     return most_recent == 0 || (mstime() - most_recent) > ms;
 }
 
@@ -1789,6 +1753,7 @@ sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
 
 /* This function sets the down_after_period field value in 'master' to all
  * the slaves and sentinel instances connected to this master. */
+//将master->down_after_period值更新到所有slaves和sentinels中
 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
     dictIterator *di;
     dictEntry *de;
