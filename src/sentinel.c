@@ -63,9 +63,9 @@ typedef struct sentinelAddr {
 #define SRI_SENTINEL (1<<2)
 // 实例已断线
 #define SRI_DISCONNECTED (1<<3)
-// 实例已处于 SDOWN 状态
+// 实例已处于 SDOWN 状态，主观下线状态
 #define SRI_S_DOWN (1<<4)   /* Subjectively down (no quorum). */
-// 实例已处于 ODOWN 状态
+// 实例已处于 ODOWN 状态，客观下线状态
 #define SRI_O_DOWN (1<<5)   /* Objectively down (confirmed by others). */
 // Sentinel 认为主服务器已下线
 #define SRI_MASTER_DOWN (1<<6) /* A Sentinel with this flag set thinks that
@@ -88,15 +88,15 @@ typedef struct sentinelAddr {
 
 /* Note: times are in milliseconds. */
 /* 各种时间常量，以毫秒为单位 */
-// 发送 INFO 命令的间隔
+// 发送 INFO 命令的间隔：10秒
 #define SENTINEL_INFO_PERIOD 10000
-// 发送 PING 命令的间隔
+// 发送 PING 命令的间隔：1秒
 #define SENTINEL_PING_PERIOD 1000
-// 发送 ASK 命令的间隔
+// 发送 ASK 命令的间隔：1秒
 #define SENTINEL_ASK_PERIOD 1000
-// 发送 PUBLISH 命令的间隔
+// 发送 PUBLISH 命令的间隔：2秒
 #define SENTINEL_PUBLISH_PERIOD 2000
-// 默认的判断服务器已下线的时长
+// 默认的判断服务器已下线的时长：30秒
 #define SENTINEL_DEFAULT_DOWN_AFTER 30000
 // 默认的信息频道
 #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
@@ -115,7 +115,7 @@ typedef struct sentinelAddr {
 #define SENTINEL_DEFAULT_FAILOVER_TIMEOUT (60*3*1000)
 // 默认的最大积压命令数量
 #define SENTINEL_MAX_PENDING_COMMANDS 100
-// 默认的选举超时时长
+// 默认的选举超时时长：10秒
 #define SENTINEL_ELECTION_TIMEOUT 10000
 #define SENTINEL_MAX_DESYNC 1000
 
@@ -177,7 +177,6 @@ typedef struct sentinelAddr {
 // Sentinel 会为每个被监视的 Redis 实例创建相应的 sentinelRedisInstance 实例
 // （被监视的实例可以是主服务器、从服务器、或者其他 Sentinel ）
 typedef struct sentinelRedisInstance {
-    
     // 标识值，记录了实例的类型，以及该实例的当前状态
     int flags;      /* See SRI_... defines */
     
@@ -320,8 +319,7 @@ typedef struct sentinelRedisInstance {
 
     /* Failover */
     /* 故障转移相关属性 -------------------------------------------------------------------*/
-
-
+    
     // 如果这是一个主服务器实例，那么 leader 将是负责进行故障转移的 Sentinel 的运行 ID 。
     // 如果这是一个 Sentinel 实例，那么 leader 就是被选举出来的领头 Sentinel 。
     // 这个域只在 Sentinel 实例的 flags 属性的 SRI_MASTER_DOWN 标志处于打开状态时才有效。
@@ -366,7 +364,6 @@ typedef struct sentinelRedisInstance {
 /* Main state. */
 /* Sentinel 的状态结构 */
 struct sentinelState {
-
     // 当前纪元
     uint64_t current_epoch;     /* Current epoch. */
 
