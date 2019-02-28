@@ -423,7 +423,6 @@ typedef struct sentinelScriptJob {
 
 // 客户端适配器（adapter）结构
 typedef struct redisAeEvents {
-
     // 客户端连接上下文
     redisAsyncContext *context;
 
@@ -498,7 +497,7 @@ static void redisAeDelWrite(void *privdata) {
     }
 }
 
-// 清理事件
+// 清理事件，清除读写事件的监听
 static void redisAeCleanup(void *privdata) {
     redisAeEvents *e = (redisAeEvents*)privdata;
     redisAeDelRead(privdata);
@@ -506,8 +505,8 @@ static void redisAeCleanup(void *privdata) {
     zfree(e);
 }
 
-// 为上下文 ae 和事件循环 loop 创建 hiredis 适配器
-// 并设置相关的异步处理函数
+// 为上下文 ae 和事件循环 loop 创建 hiredis 适配器，并设置相关的异步处理函数
+//主要是为ac分配内存并初始化ac的各个成员,ac.ev.data=redisAeEvents*
 static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
     redisContext *c = &(ac->c);
     redisAeEvents *e;
@@ -537,7 +536,6 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
 }
 
 /* ============================= Prototypes ================================= */
-
 void sentinelLinkEstablishedCallback(const redisAsyncContext *c, int status);
 void sentinelDisconnectCallback(const redisAsyncContext *c, int status);
 void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privdata);
@@ -571,7 +569,6 @@ void dictInstancesValDestructor (void *privdata, void *obj) {
 }
 
 /* Instance name (sds) -> instance (sentinelRedisInstance pointer)
- *
  * also used for: sentinelRedisInstance->sentinels dictionary that maps
  * sentinels ip:port to last seen time in Pub/Sub hello message. */
 // 这个字典类型有两个作用：
@@ -589,7 +586,6 @@ dictType instancesDictType = {
 };
 
 /* Instance runid (sds) -> votes (long casted to void*)
- *
  * This is useful into sentinelGetObjectiveLeader() function in order to
  * count the votes and understand who is the leader. */
 // 将一个运行 ID 映射到一个 cast 成 void* 类型的 long 值的投票数量上
@@ -677,12 +673,12 @@ void sentinelIsRunning(void) {
     if (server.configfile == NULL) {
         redisLog(REDIS_WARNING,
             "Sentinel started without a config file. Exiting...");
-        exit(1);
+        exit(1); //直接挂掉进程
     } else if (access(server.configfile,W_OK) == -1) {
         redisLog(REDIS_WARNING,
             "Sentinel config file %s is not writable: %s. Exiting...",
             server.configfile,strerror(errno));
-        exit(1);
+        exit(1);//配置文件无法写，也直接挂掉进程
     }
 
     /* We want to generate a +monitor event for every configured master
@@ -693,19 +689,16 @@ void sentinelIsRunning(void) {
 /* ============================== sentinelAddr ============================== */
 
 /* Create a sentinelAddr object and return it on success.
- *
  * 创建一个 sentinel 地址对象，并在创建成功时返回该对象。
- *
  * On error NULL is returned and errno is set to:
- *
  * 函数在出错时返回 NULL ，并将 errnor 设为以下值：
- *
  *  ENOENT: Can't resolve the hostname.
  *          不能解释 hostname
  *
  *  EINVAL: Invalid port number.
  *          端口号不正确
  */
+//根据hostname和port创建一个sentinelAddr
 sentinelAddr *createSentinelAddr(char *hostname, int port) {
     char buf[32];
     sentinelAddr *sa;
