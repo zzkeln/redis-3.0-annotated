@@ -749,31 +749,20 @@ int sentinelAddrIsEqual(sentinelAddr *a, sentinelAddr *b) {
 /* =========================== Events notification ========================== */
 
 /* Send an event to log, pub/sub, user notification script.
- *
  * 将事件发送到日志、频道，以及用户提醒脚本。
- * 
  * 'level' is the log level for logging. Only REDIS_WARNING events will trigger
  * the execution of the user notification script.
- *
  * level 是日志的级别。只有 REDIS_WARNING 级别的日志会触发用户提醒脚本。
- *
  * 'type' is the message type, also used as a pub/sub channel name.
- *
  * type 是信息的类型，也用作频道的名字。
- *
  * 'ri', is the redis instance target of this event if applicable, and is
  * used to obtain the path of the notification script to execute.
- *
  * ri 是引发事件的 Redis 实例，它可以用来获取可执行的用户脚本。
- *
  * The remaining arguments are printf-alike.
- *
  * 剩下的都是类似于传给 printf 函数的参数。
- *
  * If the format specifier starts with the two characters "%@" then ri is
  * not NULL, and the message is prefixed with an instance identifier in the
  * following format:
- *
  * 如果格式指定以 "%@" 两个字符开头，并且 ri 不为空，
  * 那么信息将使用以下实例标识符为开头：
  *
@@ -781,14 +770,10 @@ int sentinelAddrIsEqual(sentinelAddr *a, sentinelAddr *b) {
  *
  *  If the instance type is not master, than the additional string is
  *  added to specify the originating master:
- *
  *  如果实例的类型不是主服务器，那么以下内容会被追加到信息的后面，
  *  用于指定目标主服务器：
- *
  *  @ <master name> <master ip> <master port>
- *
  *  Any other specifier after "%@" is processed by printf itself.
- *
  * "%@" 之后的其他指派器（specifier）都和 printf 函数所使用的指派器一样。
  */
 void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
@@ -804,17 +789,13 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
 
         // 如果 ri 实例是主服务器，那么 master 就是 NULL 
         // 否则 ri 就是一个从服务器或者 sentinel ，而 master 就是该实例的主服务器
-        //
         // sentinelRedisInstance *master = NULL;
         // if (~(ri->flags & SRI_MASTER))
         //     master = ri->master;
         sentinelRedisInstance *master = (ri->flags & SRI_MASTER) ?
                                          NULL : ri->master;
-
         if (master) {
-            
             // ri 不是主服务器
-
             snprintf(msg, sizeof(msg), "%s %s %s %d @ %s %s %d",
                 // 打印 ri 的类型
                 sentinelRedisInstanceTypeStr(ri),
@@ -823,9 +804,7 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
                 // 打印 ri 的主服务器的名字、 IP 和端口号
                 master->name, master->addr->ip, master->addr->port);
         } else {
-
             // ri 是主服务器
-
             snprintf(msg, sizeof(msg), "%s %s %s %d",
                 // 打印 ri 的类型
                 sentinelRedisInstanceTypeStr(ri),
@@ -886,10 +865,10 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
 void sentinelGenerateInitialMonitorEvents(void) {
     dictIterator *di;
     dictEntry *de;
-
+    //遍历sentinel的每个master
     di = dictGetIterator(sentinel.masters);
     while((de = dictNext(di)) != NULL) {
-        sentinelRedisInstance *ri = dictGetVal(de);
+        sentinelRedisInstance *ri = dictGetVal(de);//获得master实例
         sentinelEvent(REDIS_WARNING,"+monitor",ri,"%@ quorum %d",ri->quorum);
     }
     dictReleaseIterator(di);
@@ -1027,7 +1006,7 @@ void sentinelRunPendingScripts(void) {
             sj->pid = 0;
         } else if (pid == 0) {
 
-            // 子进程执行脚本
+            // 子进程执行脚本，子进程执行完后调用_exit挂掉自己
 
             /* Child */
             execve(sj->argv[0],sj->argv,environ);
