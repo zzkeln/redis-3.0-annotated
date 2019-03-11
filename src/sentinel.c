@@ -47,6 +47,7 @@ extern char **environ;
 
 /* Address object, used to describe an ip:port pair. */
 /* 地址对象，用于保存 IP 地址和端口 */
+//ip:port会作为slave和sentinel字典的key，也是slave和sentinel的名字
 typedef struct sentinelAddr {
     char *ip;
     int port;
@@ -94,7 +95,7 @@ typedef struct sentinelAddr {
 #define SENTINEL_PING_PERIOD 1000
 // 发送 ASK 命令的间隔：1秒
 #define SENTINEL_ASK_PERIOD 1000
-// 发送 PUBLISH 命令的间隔：2秒
+// 发送 PUBLISH 命令的间隔：2秒，向__sentinel__:hello频道发送信息，让其它sentinel感知到当前sentinel的存在
 #define SENTINEL_PUBLISH_PERIOD 2000
 // 默认的判断服务器已下线的时长：30秒
 #define SENTINEL_DEFAULT_DOWN_AFTER 30000
@@ -111,7 +112,7 @@ typedef struct sentinelAddr {
 #define SENTINEL_DEFAULT_PARALLEL_SYNCS 1
 // 默认的最少重连接间隔
 #define SENTINEL_MIN_LINK_RECONNECT_PERIOD 15000
-// 默认的故障迁移执行时长
+// 默认的故障迁移执行时长：3min
 #define SENTINEL_DEFAULT_FAILOVER_TIMEOUT (60*3*1000)
 // 默认的最大积压命令数量
 #define SENTINEL_MAX_PENDING_COMMANDS 100
@@ -196,19 +197,20 @@ typedef struct sentinelRedisInstance {
     sentinelAddr *addr; /* Master host. */
 
     // 用于发送命令的异步连接
+    // 命令连接
     redisAsyncContext *cc; /* Hiredis context for commands. */
 
     // 用于执行 SUBSCRIBE 命令、接收频道信息的异步连接
-    // 仅在实例为主服务器时使用
+    // 订阅连接
     redisAsyncContext *pc; /* Hiredis context for Pub / Sub. */
 
     // 已发送但尚未回复的命令数量
     int pending_commands;   /* Number of commands sent waiting for a reply. */
 
-    // cc 连接的创建时间
+    // cc 命令连接的创建时间
     mstime_t cc_conn_time; /* cc connection time. */
     
-    // pc 连接的创建时间
+    // pc 订阅连接的创建时间
     mstime_t pc_conn_time; /* pc connection time. */
 
     // 最后一次从这个实例接收信息的时间
