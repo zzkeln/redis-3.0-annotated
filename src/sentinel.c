@@ -4744,16 +4744,13 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
     /* Only masters */
     /* 对主服务器进行处理 */
     if (ri->flags & SRI_MASTER) {
-
         // 判断 master 是否进入 ODOWN 状态
         sentinelCheckObjectivelyDown(ri);
-
         // 如果主服务器进入了 ODOWN 状态，那么开始一次故障转移操作
         if (sentinelStartFailoverIfNeeded(ri))
             // 强制向其他 Sentinel 发送 SENTINEL is-master-down-by-addr 命令
             // 刷新其他 Sentinel 关于主服务器的状态
             sentinelAskMasterStateToOtherSentinels(ri,SENTINEL_ASK_FORCED);
-
         // 执行故障转移
         sentinelFailoverStateMachine(ri);
 
@@ -4769,7 +4766,6 @@ void sentinelHandleRedisInstance(sentinelRedisInstance *ri) {
  * Recursively call the function against dictionaries of slaves. */
 // 对被 Sentinel 监视的所有实例（包括主服务器、从服务器和其他 Sentinel ）
 // 进行定期操作
-//
 //  sentinelHandleRedisInstance
 //              |
 //              |
@@ -4822,7 +4818,7 @@ void sentinelHandleDictOfRedisInstances(dict *instances) {
 }
 
 /* This function checks if we need to enter the TITL mode.
- *
+
  * 这个函数检查 sentinel 是否需要进入 TITL 模式。
  *
  * The TILT mode is entered if we detect that between two invocations of the
