@@ -2870,27 +2870,19 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
 /* Send an "Hello" message via Pub/Sub to the specified 'ri' Redis
  * instance in order to broadcast the current configuraiton for this
  * master, and to advertise the existence of this Sentinel at the same time.
- *
- * 向给定 ri 实例的频道发送信息，
- * 从而传播关于给定主服务器的配置，
- * 并向其他 Sentinel 宣告本 Sentinel 的存在。
- *
+ * 向给定 ri 实例的频道发送信息，从而传播关于给定主服务器的配置， 并向其他 Sentinel 宣告本 Sentinel 的存在。
  * The message has the following format:
- *
  * 发送信息的格式如下： 
- *
  * sentinel_ip,sentinel_port,sentinel_runid,current_epoch,
  * master_name,master_ip,master_port,master_config_epoch.
- *
  * Sentinel IP,Sentinel 端口号,Sentinel 的运行 ID,Sentinel 当前的纪元,
  * 主服务器的名称,主服务器的 IP,主服务器的端口号,主服务器的配置纪元.
- *
  * Returns REDIS_OK if the PUBLISH was queued correctly, otherwise
  * REDIS_ERR is returned. 
- *
  * PUBLISH 命令成功入队时返回 REDIS_OK ，
  * 否则返回 REDIS_ERR 。
  */
+//通过命令连接向实例ri的__sentinel__:hello频道发送信息（包括当前sentinel和master的信息）
 int sentinelSendHello(sentinelRedisInstance *ri) {
     char ip[REDIS_IP_STR_LEN];
     char payload[REDIS_IP_STR_LEN+1024];
@@ -2933,7 +2925,6 @@ int sentinelSendHello(sentinelRedisInstance *ri) {
 
 /* Send a PING to the specified instance and refresh the last_ping_time
  * if it is zero (that is, if we received a pong for the previous ping).
- *
  * On error zero is returned, and we can't consider the PING command
  * queued in the connection. */
 // 向指定的 Sentinel 发送 PING 命令。
@@ -2963,7 +2954,7 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
 
     /* Return ASAP if we have already a PING or INFO already pending, or
      * in the case the instance is not properly connected. */
-    // 函数不能在网络连接未创建时执行
+    // 函数不能在网络连接未创建时执行。通过命令连接发送信息
     if (ri->flags & SRI_DISCONNECTED) return;
 
     /* For INFO, PING, PUBLISH that are not critical commands to send we
@@ -2988,14 +2979,14 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
         (ri->master->flags & (SRI_O_DOWN|SRI_FAILOVER_IN_PROGRESS))) {
         info_period = 1000;
     } else {
-        info_period = SENTINEL_INFO_PERIOD;
+        info_period = SENTINEL_INFO_PERIOD;//10s一次
     }
 
     /* We ping instances every time the last received pong is older than
      * the configured 'down-after-milliseconds' time, but every second
      * anyway if 'down-after-milliseconds' is greater than 1 second. */
     ping_period = ri->down_after_period;
-    if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD;
+    if (ping_period > SENTINEL_PING_PERIOD) ping_period = SENTINEL_PING_PERIOD; //1s
 
     // 实例不是 Sentinel （主服务器或者从服务器）
     // 并且以下条件的其中一个成立：
@@ -3011,10 +3002,12 @@ void sentinelSendPeriodicCommands(sentinelRedisInstance *ri) {
             sentinelInfoReplyCallback, NULL, "INFO");
         if (retval == REDIS_OK) ri->pending_commands++;
     } else if ((now - ri->last_pong_time) > ping_period) {
+        //发送ping命令，1s一次
         /* Send PING to all the three kinds of instances. */
         sentinelSendPing(ri);
     } else if ((now - ri->last_pub_time) > SENTINEL_PUBLISH_PERIOD) {
         /* PUBLISH hello messages to all the three kinds of instances. */
+        //发送hello信息，2s一次
         sentinelSendHello(ri);
     }
 }
@@ -3044,23 +3037,23 @@ void addReplySentinelRedisInstance(redisClient *c, sentinelRedisInstance *ri) {
 
     mbl = addDeferredMultiBulkLength(c);
 
-    addReplyBulkCString(c,"name");
+    addReplyBulkCString(c,"name"); //名字
     addReplyBulkCString(c,ri->name);
     fields++;
 
-    addReplyBulkCString(c,"ip");
+    addReplyBulkCString(c,"ip"); // ip
     addReplyBulkCString(c,ri->addr->ip);
     fields++;
 
-    addReplyBulkCString(c,"port");
+    addReplyBulkCString(c,"port"); // port
     addReplyBulkLongLong(c,ri->addr->port);
     fields++;
 
-    addReplyBulkCString(c,"runid");
+    addReplyBulkCString(c,"runid"); // runid
     addReplyBulkCString(c,ri->runid ? ri->runid : "");
     fields++;
 
-    addReplyBulkCString(c,"flags");
+    addReplyBulkCString(c,"flags"); //各个flag
     if (ri->flags & SRI_S_DOWN) flags = sdscat(flags,"s_down,");
     if (ri->flags & SRI_O_DOWN) flags = sdscat(flags,"o_down,");
     if (ri->flags & SRI_MASTER) flags = sdscat(flags,"master,");
@@ -3248,7 +3241,7 @@ sentinelRedisInstance *sentinelGetMasterByNameOrReplyError(redisClient *c,
                         robj *name)
 {
     sentinelRedisInstance *ri;
-
+    //从masters字典中找master实例
     ri = dictFetchValue(sentinel.masters,c->argv[2]->ptr);
     if (!ri) {
         addReplyError(c,"No such master with that name");
@@ -3262,7 +3255,7 @@ void sentinelCommand(redisClient *c) {
     if (!strcasecmp(c->argv[1]->ptr,"masters")) {
         /* SENTINEL MASTERS */
         if (c->argc != 2) goto numargserr;
-        addReplyDictOfRedisInstances(c,sentinel.masters);
+        addReplyDictOfRedisInstances(c,sentinel.masters); //打印监视的所有master实例信息
     } else if (!strcasecmp(c->argv[1]->ptr,"master")) {
         /* SENTINEL MASTER <name> */
         sentinelRedisInstance *ri;
@@ -3270,7 +3263,7 @@ void sentinelCommand(redisClient *c) {
         if (c->argc != 3) goto numargserr;
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2]))
             == NULL) return;
-        addReplySentinelRedisInstance(c,ri);
+        addReplySentinelRedisInstance(c,ri); //打印某个master实例信息
     } else if (!strcasecmp(c->argv[1]->ptr,"slaves")) {
         /* SENTINEL SLAVES <master-name> */
         sentinelRedisInstance *ri;
@@ -3278,7 +3271,7 @@ void sentinelCommand(redisClient *c) {
         if (c->argc != 3) goto numargserr;
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2])) == NULL)
             return;
-        addReplyDictOfRedisInstances(c,ri->slaves);
+        addReplyDictOfRedisInstances(c,ri->slaves);//打印master下所有slave信息
     } else if (!strcasecmp(c->argv[1]->ptr,"sentinels")) {
         /* SENTINEL SENTINELS <master-name> */
         sentinelRedisInstance *ri;
@@ -3286,7 +3279,7 @@ void sentinelCommand(redisClient *c) {
         if (c->argc != 3) goto numargserr;
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2])) == NULL)
             return;
-        addReplyDictOfRedisInstances(c,ri->sentinels);
+        addReplyDictOfRedisInstances(c,ri->sentinels);//打印master下所有sentinel信息
     } else if (!strcasecmp(c->argv[1]->ptr,"is-master-down-by-addr")) {
         /* SENTINEL IS-MASTER-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>*/
         sentinelRedisInstance *ri;
@@ -3365,7 +3358,7 @@ void sentinelCommand(redisClient *c) {
         }
         redisLog(REDIS_WARNING,"Executing user requested FAILOVER of '%s'",
             ri->name);
-        sentinelStartFailover(ri);
+        sentinelStartFailover(ri);//开始故障迁移
         ri->flags |= SRI_FORCE_FAILOVER;
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"pending-scripts")) {
@@ -3419,7 +3412,7 @@ void sentinelCommand(redisClient *c) {
         if ((ri = sentinelGetMasterByNameOrReplyError(c,c->argv[2]))
             == NULL) return;
         sentinelEvent(REDIS_WARNING,"-monitor",ri,"%@");
-        dictDelete(sentinel.masters,c->argv[2]->ptr);
+        dictDelete(sentinel.masters,c->argv[2]->ptr); //删除指定的master实例
         sentinelFlushConfig();
         addReply(c,shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr,"set")) {
