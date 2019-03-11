@@ -1269,8 +1269,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
     // 为了避免这种现象，程序在添加新实例之前，需要先检查实例是否已存在
     // 只有不存在的实例会被添加
 
-    // 选择要添加的表
-    // 注意主服务会被添加到 sentinel.masters 表
+    // 选择要添加的表。注意主服务器会被添加到 sentinel.masters 表
     // 而从服务器和 sentinel 则会被添加到 master 所属的 slaves 表和 sentinels 表中
     if (flags & SRI_MASTER) table = sentinel.masters;
     else if (flags & SRI_SLAVE) table = master->slaves;
@@ -1363,6 +1362,7 @@ sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *
  * 如果这个实例是一个从服务器或者 sentinel ，
  * 那么这个函数也会从该实例所属的主服务器表中删除这个从服务器/sentinel 。
  */
+//释放一个实例，如果是主服务器的话也同样释放它属下的slave和sentinel实例
 void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
     /* Release all its slaves or sentinels if any. */
     // 释放（可能有的）sentinel 和 slave
@@ -1390,11 +1390,11 @@ void releaseSentinelRedisInstance(sentinelRedisInstance *ri) {
     if ((ri->flags & SRI_SLAVE) && (ri->flags & SRI_PROMOTED) && ri->master)
         ri->master->promoted_slave = NULL;
 
-    zfree(ri);
+    zfree(ri);//释放该实例
 }
 
 /* Lookup a slave in a master Redis instance, by ip and port. */
-// 根据 IP 和端口号，查找主服务器实例的从服务器
+// 根据 IP 和端口号，查找主服务器属下的从服务器
 sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
                 sentinelRedisInstance *ri, char *ip, int port)
 {
@@ -1404,7 +1404,7 @@ sentinelRedisInstance *sentinelRedisInstanceLookupSlave(
     redisAssert(ri->flags & SRI_MASTER);
     key = sdscatprintf(sdsempty(),
         strchr(ip,':') ? "[%s]:%d" : "%s:%d",
-        ip,port);
+        ip,port);//ip:port作为名字
     slave = dictFetchValue(ri->slaves,key);//从ri的从服务器字典中查找ip:port对应的从服务器
     sdsfree(key);
     return slave;
@@ -1462,7 +1462,7 @@ int removeMatchingSentinelsFromMaster(sentinelRedisInstance *master, char *ip, i
     }
     dictReleaseIterator(di);
 
-    return removed;
+    return removed;//返回移除实例的数量
 }
 
 /* Search an instance with the same runid, ip and port into a dictionary
@@ -1570,12 +1570,12 @@ void sentinelResetMaster(sentinelRedisInstance *ri, int flags) {
 
     if (!(flags & SENTINEL_RESET_NO_SENTINELS)) {
         dictRelease(ri->sentinels);//释放所有sentinels
-        ri->sentinels = dictCreate(&instancesDictType,NULL);
+        ri->sentinels = dictCreate(&instancesDictType,NULL);//为sentinel创建新的空字典
     }
 
-    if (ri->cc) sentinelKillLink(ri,ri->cc);
+    if (ri->cc) sentinelKillLink(ri,ri->cc);//释放命令连接
 
-    if (ri->pc) sentinelKillLink(ri,ri->pc);
+    if (ri->pc) sentinelKillLink(ri,ri->pc);//释放订阅连接  
 
     // 设置标识为断线的主服务器
     ri->flags &= SRI_MASTER|SRI_DISCONNECTED;
@@ -1616,7 +1616,7 @@ int sentinelResetMastersByPattern(char *pattern, int flags) {
         sentinelRedisInstance *ri = dictGetVal(de);
 
         if (ri->name) {
-            if (stringmatch(pattern,ri->name,0)) {
+            if (stringmatch(pattern,ri->name,0)) { //名字符合模式，进行重置
                 sentinelResetMaster(ri,flags);
                 reset++;
             }
@@ -1636,9 +1636,11 @@ int sentinelResetMastersByPattern(char *pattern, int flags) {
  * reason. Otherwise REDIS_OK is returned.  
  * 函数在无法解释地址时返回 REDIS_ERR ，否则返回 REDIS_OK 。
  */
+//将master的ip,port改成指定的，将原来master的slave和原来master添加到新master的slave中（如果原来master的地址和新master的ip, port
+//不同的话）
 int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip, int port) {
     sentinelAddr *oldaddr, *newaddr;
-    sentinelAddr **slaves = NULL;
+    sentinelAddr **slaves = NULL; //slaves数组，里面每个元素都保存一个ip port
     int numslaves = 0, j;
     dictIterator *di;
     dictEntry *de;
@@ -1683,7 +1685,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
     sentinelResetMaster(master,SENTINEL_RESET_NO_SENTINELS);
     oldaddr = master->addr;
     // 为 master 实例设置新的地址
-    master->addr = newaddr;
+    master->addr = newaddr;//更新ip, port
     master->o_down_since_time = 0;
     master->s_down_since_time = 0;
 
@@ -1702,7 +1704,7 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
             sentinelFlushConfig();
         }
     }
-    zfree(slaves);
+    zfree(slaves);//释放临时数组
 
     /* Release the old address at the end so we are safe even if the function
      * gets the master->addr->ip and master->addr->port as arguments. */
@@ -1718,11 +1720,12 @@ int sentinelResetMasterAndChangeAddress(sentinelRedisInstance *master, char *ip,
 int sentinelRedisInstanceNoDownFor(sentinelRedisInstance *ri, mstime_t ms) {
     mstime_t most_recent;
 
-    most_recent = ri->s_down_since_time;
+    most_recent = ri->s_down_since_time;//上次主观下线时间
     if (ri->o_down_since_time > most_recent)
         most_recent = ri->o_down_since_time;
     //most_recent记录ODOWN或SDOWN发生并离现在最近的时间点
     
+    //返回非0表示最近的ms时间内没发生过主、客观下线
     return most_recent == 0 || (mstime() - most_recent) > ms;
 }
 
@@ -1740,15 +1743,16 @@ sentinelAddr *sentinelGetCurrentMasterAddress(sentinelRedisInstance *master) {
         master->promoted_slave &&
         master->failover_state >= SENTINEL_FAILOVER_STATE_RECONF_SLAVES)
     {
-        return master->promoted_slave->addr;
+        return master->promoted_slave->addr; //返回新的master地址
     } else {
-        return master->addr;
+        return master->addr;//返回master地址
     }
 }
 
 /* This function sets the down_after_period field value in 'master' to all
  * the slaves and sentinel instances connected to this master. */
 //将master->down_after_period值更新到所有slaves和sentinels中
+//down_after_period是多少毫秒后无回复才被判为主观下线，slave和sentinel的值都采用master的值
 void sentinelPropagateDownAfterPeriod(sentinelRedisInstance *master) {
     dictIterator *di;
     dictEntry *de;
