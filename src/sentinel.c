@@ -272,13 +272,11 @@ typedef struct sentinelRedisInstance {
 
     /* Master specific. */
     /* 主服务器实例特有的属性 -------------------------------------------------------------*/
-
-    // 其他同样监控这个主服务器的所有 sentinel
+    // 其他同样监控这个主服务器的所有 sentinel，key是sentinel的ip:port
     dict *sentinels;    /* Other sentinels monitoring the same master. */
 
     // 如果这个实例代表的是一个主服务器
-    // 那么这个字典保存着主服务器属下的从服务器
-    // 字典的键是从服务器的名字，字典的值是从服务器对应的 sentinelRedisInstance 结构
+    // 那么这个字典保存着主服务器属下的从服务器，字典的键是从服务器的名字，字典的值是从服务器对应的 sentinelRedisInstance 结构
     dict *slaves;       /* Slaves for this master instance. */
 
     // SENTINEL monitor <master-name> <IP> <port> <quorum> 选项中的 quorum 参数
@@ -304,7 +302,7 @@ typedef struct sentinelRedisInstance {
     // 执行故障转移操作时，从服务器发送 SLAVEOF <new-master> 命令的时间
     mstime_t slave_reconf_sent_time; /* Time at which we sent SLAVE OF <new> */
 
-    // 主服务器的实例（在本实例为从服务器时使用）
+    // 主服务器的实例（在本实例为从服务器时使用，即当前从服务器所属的主服务器）
     struct sentinelRedisInstance *master; /* Master instance if it's slave. */
 
     // INFO 命令的回复中记录的主服务器 IP
@@ -323,7 +321,7 @@ typedef struct sentinelRedisInstance {
     /* 故障转移相关属性 -------------------------------------------------------------------*/
     
     // 如果这是一个主服务器实例，那么 leader 将是负责进行故障转移的 Sentinel 的运行 ID 。
-    // 如果这是一个 Sentinel 实例，那么 leader 就是被选举出来的领头 Sentinel 。
+    // 如果这是一个 Sentinel 实例，那么 leader 就是被选举出来的领头 Sentinel的运行 ID 。
     // 这个域只在 Sentinel 实例的 flags 属性的 SRI_MASTER_DOWN 标志处于打开状态时才有效。
     char *leader;       /* If this is a master instance, this is the runid of
                            the Sentinel that should perform the failover. If
