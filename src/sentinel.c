@@ -634,7 +634,7 @@ void initSentinel(void) {
     /* Remove usual Redis commands from the command table, then just add
      * the SENTINEL command. */
 
-    // 清空 Redis 服务器的命令表（该表用于普通模式）
+    // 清空 Redis 服务器的命令表（该表用于普通redis服务器模式）
     dictEmpty(server.commands,NULL);
     // 将 SENTINEL 模式所用的命令添加进命令表
     for (j = 0; j < sizeof(sentinelcmds)/sizeof(sentinelcmds[0]); j++) {
@@ -839,7 +839,7 @@ void sentinelEvent(int level, char *type, sentinelRedisInstance *ri,
         channel = createStringObject(type,strlen(type));
         // 内容
         payload = createStringObject(msg,strlen(msg));
-        // 发送信息
+        // 发送信息到频道
         pubsubPublishMessage(channel,payload);
         decrRefCount(channel);
         decrRefCount(payload);
@@ -1216,18 +1216,14 @@ void sentinelCallClientReconfScript(sentinelRedisInstance *master, int role, cha
  *               如果这个值为 0 ，那么表示我们未收到过 INFO 信息。
  * If SRI_MASTER is set into initial flags the instance is added to
  * sentinel.masters table.
- * 如果 flags 参数为 SRI_MASTER ，
- * 那么这个实例会被添加到 sentinel.masters 表。
+ * 如果 flags 参数为 SRI_MASTER ， 那么这个实例会被添加到 sentinel.masters 表。
  * if SRI_SLAVE or SRI_SENTINEL is set then 'master' must be not NULL and the
  * instance is added into master->slaves or master->sentinels table.
- * 如果 flags 为 SRI_SLAVE 或者 SRI_SENTINEL ，
- * 那么 master 参数不能为 NULL ，
- * SRI_SLAVE 类型的实例会被添加到 master->slaves 表中，
- * 而 SRI_SENTINEL 类型的实例则会被添加到 master->sentinels 表中。
+ * 如果 flags 为 SRI_SLAVE 或者 SRI_SENTINEL ，那么 master 参数不能为 NULL ，SRI_SLAVE 类型的实例会被
+ * 添加到 master->slaves 表中，而 SRI_SENTINEL 类型的实例则会被添加到 master->sentinels 表中。
  * If the instance is a slave or sentinel, the name parameter is ignored and
  * is created automatically as hostname:port.
- * 如果实例是从服务器或者 sentinel ，那么 name 参数会被自动忽略，
- * 实例的名字会被自动设置为 hostname:port 。
+ * 如果实例是从服务器或者 sentinel ，那么 name 参数会被自动忽略，实例的名字会被自动设置为 hostname:port 。
  * The function fails if hostname can't be resolved or port is out of range.
  * When this happens NULL is returned and errno is set accordingly to the
  * createSentinelAddr() function.
@@ -1236,8 +1232,7 @@ void sentinelCallClientReconfScript(sentinelRedisInstance *master, int role, cha
  * 具体的出错值请参考 createSentinelAddr() 函数。
  * The function may also fail and return NULL with errno set to EBUSY if
  * a master or slave with the same name already exists. 
- * 当相同名字的主服务器或者从服务器已经存在时，函数返回 NULL ，
- * 并将 errno 设为 EBUSY 。
+ * 当相同名字的主服务器或者从服务器已经存在时，函数返回 NULL ，并将 errno 设为 EBUSY 。
  */
 //创建一个sentinelRedisInstance实例
 sentinelRedisInstance *createSentinelRedisInstance(char *name, int flags, char *hostname, int port, 
