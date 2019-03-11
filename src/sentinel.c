@@ -1805,12 +1805,12 @@ char *sentinelHandleConfiguration(char **argv, int argc) {
         ri = sentinelGetMasterByName(argv[1]);
         if (!ri) return "No such master with specified name.";
 
-        // 设置选项
+        // 设置down_after_period参数
         ri->down_after_period = atoi(argv[2]);
         if (ri->down_after_period <= 0)
             return "negative or zero time parameter.";
 
-        sentinelPropagateDownAfterPeriod(ri);
+        sentinelPropagateDownAfterPeriod(ri);//将down_after_period参数传播给sentinel和slave
 
     // SENTINEL failover-timeout 选项
     } else if (!strcasecmp(argv[0],"failover-timeout") && argc == 3) {
@@ -2078,16 +2078,11 @@ void rewriteConfigSentinelOption(struct rewriteConfigState *state) {
 
 /* This function uses the config rewriting Redis engine in order to persist
  * the state of the Sentinel in the current configuration file.
- *
  * 使用 CONFIG REWRITE 功能，将当前 Sentinel 的状态持久化到配置文件里面。
- *
  * Before returning the function calls fsync() against the generated
  * configuration file to make sure changes are committed to disk.
- *
  * 在函数返回之前，程序会调用一次 fsync() ，确保文件已经被保存到磁盘里面。
- *
  * On failure the function logs a warning on the Redis log. 
- *
  * 如果保存失败，那么打印一条警告日志。
  */
 void sentinelFlushConfig(void) {
@@ -2101,7 +2096,7 @@ void sentinelFlushConfig(void) {
 
     if (rewrite_status == -1) goto werr;
     if ((fd = open(server.configfile,O_RDONLY)) == -1) goto werr;
-    if (fsync(fd) == -1) goto werr;
+    if (fsync(fd) == -1) goto werr;//同步文件到磁盘
     if (close(fd) == EOF) goto werr;
     return;
 
@@ -2132,12 +2127,9 @@ void sentinelKillLink(sentinelRedisInstance *ri, redisAsyncContext *c) {
 /* This function takes a hiredis context that is in an error condition
  * and make sure to mark the instance as disconnected performing the
  * cleanup needed.
- *
  * 函数将一个出错连接设置正确的断线标志，并执行清理操作
- *
  * Note: we don't free the hiredis context as hiredis will do it for us
  * for async connections. 
- *
  * 这个函数没有手动释放连接，因为异步连接会自动释放
  */
 void sentinelDisconnectInstanceFromContext(const redisAsyncContext *c) {
@@ -2181,24 +2173,19 @@ void sentinelDisconnectCallback(const redisAsyncContext *c, int status) {
 
 /* Send the AUTH command with the specified master password if needed.
  * Note that for slaves the password set for the master is used.
- *
  * 如果 sentinel 设置了 auth-pass 选项，那么向主服务器或者从服务器发送验证密码。
  * 注意从服务器使用的是主服务器的密码。
- *
  * We don't check at all if the command was successfully transmitted
  * to the instance as if it fails Sentinel will detect the instance down,
  * will disconnect and reconnect the link and so forth. 
- *
  * 函数不检查命令是否被成功发送，因为如果目标服务器掉线了的话， sentinel 会识别到，
  * 并对它进行重连接，然后又重新发送 AUTH 命令。
  */
 void sentinelSendAuthIfNeeded(sentinelRedisInstance *ri, redisAsyncContext *c) {
-
     // 如果 ri 是主服务器，那么使用实例自己的密码
     // 如果 ri 是从服务器，那么使用主服务器的密码
     char *auth_pass = (ri->flags & SRI_MASTER) ? ri->auth_pass :
                                                  ri->master->auth_pass;
-
     // 发送 AUTH 命令
     if (auth_pass) {
         if (redisAsyncCommand(c, sentinelDiscardReplyCallback, NULL, "AUTH %s",
@@ -2228,15 +2215,14 @@ void sentinelSetClientName(sentinelRedisInstance *ri, redisAsyncContext *c, char
  * is disconnected. Note that the SRI_DISCONNECTED flag is set even if just
  * one of the two links (commands and pub/sub) is missing. */
 // 如果 sentinel 与实例处于断线（未连接）状态，那么创建连向实例的异步连接。
+//与实例ri建立连接，如果是主或从服务器，那么创建命令连接和订阅连接；如果是其它sentinel实例，那么创建命令连接
 void sentinelReconnectInstance(sentinelRedisInstance *ri) {
-
     // 示例未断线（已连接），返回
     if (!(ri->flags & SRI_DISCONNECTED)) return;
 
     /* Commands connection. */
     // 对所有实例创建一个用于发送 Redis 命令的连接
     if (ri->cc == NULL) {
-
         // 连接实例
         ri->cc = redisAsyncConnect(ri->addr->ip,ri->addr->port);
 
@@ -2297,7 +2283,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
             // 发送 AUTH 命令，验证身份
             sentinelSendAuthIfNeeded(ri,ri->pc);
 
-            // 为客户但设置名字 "pubsub"
+            // 为客户端设置名字 "pubsub"
             sentinelSetClientName(ri,ri->pc,"pubsub");
 
             /* Now we subscribe to the Sentinels "Hello" channel. */
@@ -2327,9 +2313,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
 /* ======================== Redis instances pinging  ======================== */
 
 /* Return true if master looks "sane", that is:
- *
  * 如果主服务器看上去是合理（sane），那么返回真。判断是否合理的条件如下：
- *
  * 1) It is actually a master in the current configuration.
  *    它在当前配置中的角色为主服务器
  * 2) It reports itself as a master.
@@ -2339,6 +2323,7 @@ void sentinelReconnectInstance(sentinelRedisInstance *ri) {
  * 4) We obtained last INFO no more than two times the INFO period time ago. 
  *    主服务器最近一次刷新 INFO 信息距离现在不超过 SENTINEL_INFO_PERIOD 的两倍时间
  */
+//返回true：master一切ok
 int sentinelMasterLooksSane(sentinelRedisInstance *master) {
     return
         master->flags & SRI_MASTER &&
@@ -2350,6 +2335,7 @@ int sentinelMasterLooksSane(sentinelRedisInstance *master) {
 /* Process the INFO output from masters. */
 // 从主服务器或者从服务器所返回的 INFO 命令的回复中分析相关信息
 // （上面的英文注释错了，这个函数不仅处理主服务器的 INFO 回复，还处理从服务器的 INFO 回复）
+//sentinel收到主从服务器的INFO命令的回复，对回复进行分析。
 void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     sds *lines;
     int numlines, j;
@@ -2368,9 +2354,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
         sds l = lines[j];
 
         /* run_id:<40 hex chars>*/
-        // 读取并分析 runid
+        // 读取并分析 runid，尝试更新runid属性
         if (sdslen(l) >= 47 && !memcmp(l,"run_id:",7)) {
-
             // 新设置 runid
             if (ri->runid == NULL) {
                 ri->runid = sdsnewlen(l+7,40);
@@ -2378,7 +2363,6 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
                 // RUNID 不同，说明服务器已重启
                 if (strncmp(ri->runid,l+7,40) != 0) {
                     sentinelEvent(REDIS_NOTICE,"+reboot",ri,"%@");
-
                     // 释放旧 ID ，设置新 ID
                     sdsfree(ri->runid);
                     ri->runid = sdsnewlen(l+7,40);
@@ -2418,7 +2402,8 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
             /* Check if we already have this slave into our table,
              * otherwise add it. */
             // 如果发现有新的从服务器出现，那么为它添加实例
-            if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) {
+            if (sentinelRedisInstanceLookupSlave(ri,ip,atoi(port)) == NULL) { 
+                //没找到这个ip:port的从服务器，那么创建出该从服务器实例并添加到slave中
                 if ((slave = createSentinelRedisInstance(NULL,SRI_SLAVE,ip,
                             atoi(port), ri->quorum, ri)) != NULL)
                 {
@@ -2443,7 +2428,6 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
 
         // 处理从服务器
         if (role == SRI_SLAVE) {
-
             /* master_host:<host> */
             // 读入主服务器的 IP
             if (sdslen(l) >= 12 && !memcmp(l,"master_host:",12)) {
@@ -2495,7 +2479,6 @@ void sentinelRefreshInstanceInfo(sentinelRedisInstance *ri, const char *info) {
     /* ---------------------------- Acting half -----------------------------
      * Some things will not happen if sentinel.tilt is true, but some will
      * still be processed. 
-     *
      * 如果 sentinel 进入了 TILT 模式，那么可能只有一部分动作会被执行
      */
 
@@ -2668,7 +2651,7 @@ void sentinelInfoReplyCallback(redisAsyncContext *c, void *reply, void *privdata
     r = reply;
 
     if (r->type == REDIS_REPLY_STRING) {
-        sentinelRefreshInstanceInfo(ri,r->str);
+        sentinelRefreshInstanceInfo(ri,r->str); //处理info命令的回复
     }
 }
 
@@ -2700,7 +2683,7 @@ void sentinelPingReplyCallback(redisAsyncContext *c, void *reply, void *privdata
             strncmp(r->str,"LOADING",7) == 0 ||
             strncmp(r->str,"MASTERDOWN",10) == 0)
         {
-            // 实例运作正常
+            // 实例运作正常, last_avil_time表示实例最后一次返回正确的PING命令回复的时间
             ri->last_avail_time = mstime();
             ri->last_ping_time = 0; /* Flag the pong as received. */
         } else {
@@ -2748,13 +2731,10 @@ void sentinelPublishReplyCallback(redisAsyncContext *c, void *reply, void *privd
 
 /* Process an hello message received via Pub/Sub in master or slave instance,
  * or sent directly to this sentinel via the (fake) PUBLISH command of Sentinel.
- *
  * 处理从 Pub/Sub 连接得来的，来自主服务器或者从服务器的 hello 消息。
  * hello 消息也可能是另一个 Sentinel 通过 PUBLISH 命令发送过来的。
- *
  * If the master name specified in the message is not known, the message is
  * discareded. 
- *
  * 如果消息里面指定的主服务器的名字是未知的，那么这条消息将被丢弃。
  */
 void sentinelProcessHelloMessage(char *hello, int hello_len) {
@@ -2776,16 +2756,15 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
         // 看这个 Sentinel 是否已经认识发送消息的 Sentinel
         port = atoi(token[1]);
         master_port = atoi(token[6]);
+        //从对应master的sentinel字典里看看这个sentinel是否已经存在
         si = getSentinelRedisInstanceByAddrAndRunID(
                         master->sentinels,token[0],port,token[2]);
         current_epoch = strtoull(token[3],NULL,10);
         master_config_epoch = strtoull(token[7],NULL,10);
 
+        //如果不存在，那么加入master->sentinels字典中
         if (!si) {
-
-            // 这个 Sentinel 不认识发送消息的 Sentinel 
-            // 将对方加入到 Sentinel 列表中
-
+            // 这个 Sentinel 不认识发送消息的 Sentinel， 将对方加入到 Sentinel 列表中
             /* If not, remove all the sentinels that have the same runid
              * OR the same ip/port, because it's either a restart or a
              * network topology change. */
@@ -2798,6 +2777,7 @@ void sentinelProcessHelloMessage(char *hello, int hello_len) {
             }
 
             /* Add the new sentinel. */
+            //添加sentinel到master->sentinel字典中
             si = createSentinelRedisInstance(NULL,SRI_SENTINEL,
                             token[0],port,master->quorum,master);
             if (si) {
@@ -2881,9 +2861,9 @@ void sentinelReceiveHelloMessages(redisAsyncContext *c, void *reply, void *privd
         strcmp(r->element[0]->str,"message") != 0) return;
 
     /* We are not interested in meeting ourselves */
-    // 只处理非自己发送的信息
+    // 只处理非自己发送的信息。相同runid，说明自己发送的信息直接忽略
     if (strstr(r->element[2]->str,server.runid) != NULL) return;
-
+    //处理__sentinel__:hello频道的信息
     sentinelProcessHelloMessage(r->element[2]->str, r->element[2]->len);
 }
 
