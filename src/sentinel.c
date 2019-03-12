@@ -213,7 +213,7 @@ typedef struct sentinelRedisInstance {
     // pc 订阅连接的创建时间
     mstime_t pc_conn_time; /* pc connection time. */
 
-    // 最后一次从这个实例接收信息的时间
+    // 最后一次从这个实例接收信息的时间。即最后一次从订阅连接接收到消息的时间
     mstime_t pc_last_activity; /* Last time we received any message. */
 
     // 实例最后一次返回正确的 PING 命令回复的时间
