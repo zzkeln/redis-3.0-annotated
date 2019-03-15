@@ -77,14 +77,16 @@ void clusterDelNode(clusterNode *delnode);
 /* -----------------------------------------------------------------------------
  * Initialization
  * -------------------------------------------------------------------------- */
+//初始化相关代码
 
 /* Return the greatest configEpoch found in the cluster. */
+//返回集群中所有节点中的最大配置纪元
 uint64_t clusterGetMaxEpoch(void) {
     uint64_t max = 0;
     dictIterator *di;
     dictEntry *de;
 
-    // 选出节点中的最大纪元
+    // 选出节点中的最大纪元。遍历cluster的所有nodes，选出最大的配置纪元
     di = dictGetSafeIterator(server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
@@ -102,12 +104,14 @@ uint64_t clusterGetMaxEpoch(void) {
  * when we lock the nodes.conf file, we create a zero-length one for the
  * sake of locking if it does not already exist), REDIS_ERR is returned.
  * If the configuration was loaded from the file, REDIS_OK is returned. */
+//载入集群配置
 int clusterLoadConfig(char *filename) {
     FILE *fp = fopen(filename,"r");
     struct stat sb;
     char *line;
     int maxline, j;
 
+    //文件打开失败，返回错误，直接挂掉进程
     if (fp == NULL) {
         if (errno == ENOENT) {
             return REDIS_ERR;
@@ -121,6 +125,7 @@ int clusterLoadConfig(char *filename) {
 
     /* Check if the file is zero-length: if so return REDIS_ERR to signal
      * we have to write the config. */
+    //文件大小为0，返回错误
     if (fstat(fileno(fp),&sb) != -1 && sb.st_size == 0) {
         fclose(fp);
         return REDIS_ERR;
@@ -130,20 +135,16 @@ int clusterLoadConfig(char *filename) {
      * be really long as they include all the hash slots of the node.
      * 集群配置文件中的行可能会非常长，
      * 因为它会在行里面记录所有哈希槽的节点。
-     *
      * This means in the worst possible case, half of the Redis slots will be
      * present in a single line, possibly in importing or migrating state, so
      * together with the node ID of the sender/receiver.
-     *
      * 在最坏情况下，一个行可能保存了半数的哈希槽数据，
      * 并且可能带有导入或导出状态，以及发送者和接受者的 ID 。
-     *
      * To simplify we allocate 1024+REDIS_CLUSTER_SLOTS*128 bytes per line. 
-     *
      * 为了简单起见，我们为每行分配 1024+REDIS_CLUSTER_SLOTS*128 字节的空间
      */
-    maxline = 1024+REDIS_CLUSTER_SLOTS*128;
-    line = zmalloc(maxline);
+    maxline = 1024+REDIS_CLUSTER_SLOTS*128; //2M多的大小
+    line = zmalloc(maxline); //在堆上分配这块内存
     while(fgets(line,maxline,fp) != NULL) {
         int argc;
         sds *argv;
@@ -153,6 +154,7 @@ int clusterLoadConfig(char *filename) {
         /* Skip blank lines, they can be created either by users manually
          * editing nodes.conf or by the config writing process if stopped
          * before the truncate() call. */
+        //跳过空行
         if (line[0] == '\n') continue;
 
         /* Split the line into arguments for processing. */
@@ -242,7 +244,7 @@ int clusterLoadConfig(char *filename) {
                 master = createClusterNode(argv[3],0);
                 clusterAddNode(master);
             }
-            // 设置主节点
+            // 为从节点设置主节点
             n->slaveof = master;
             // 将节点 n 加入到主节点 master 的从节点名单中
             clusterNodeAddSlave(master,n);
@@ -361,18 +363,22 @@ int clusterSaveConfig(int do_fsync) {
         (unsigned long long) server.cluster->currentEpoch,
         (unsigned long long) server.cluster->lastVoteEpoch);
     content_size = sdslen(ci);
-
+    //打开文件用于写，失败则返回-1
     if ((fd = open(server.cluster_configfile,O_WRONLY|O_CREAT,0644))
         == -1) goto err;
 
     /* Pad the new payload if the existing file length is greater. */
     if (fstat(fd,&sb) != -1) {
+        //如果文件大小已经比content_size大了，那么把ci的大小涨到st_size（不足的用0来补齐）
         if (sb.st_size > content_size) {
             ci = sdsgrowzero(ci,sb.st_size);
             memset(ci+content_size,'\n',sb.st_size-content_size);
         }
     }
+    //将内容写入文件中，写入大小不等于内容大小的话，算失败。
+    //这里有点问题，应该用循环写的，不能就写一次就完了。
     if (write(fd,ci,sdslen(ci)) != (ssize_t)sdslen(ci)) goto err;
+    //文件同步
     if (do_fsync) {
         server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
         fsync(fd);
@@ -403,17 +409,17 @@ void clusterSaveConfigOrDie(int do_fsync) {
 
 /* Lock the cluster config using flock(), and leaks the file descritor used to
  * acquire the lock so that the file will be locked forever.
- *
  * This works because we always update nodes.conf with a new version
  * in-place, reopening the file, and writing to it in place (later adjusting
  * the length with ftruncate()).
- *
  * On success REDIS_OK is returned, otherwise an error is logged and
  * the function returns REDIS_ERR to signal a lock was not acquired. */
+//用文件锁锁住配置文件
 int clusterLockConfig(char *filename) {
     /* To lock it, we need to open the file in a way it is created if
      * it does not exist, otherwise there is a race condition with other
      * processes. */
+    //打开配置文件（不存在的话则创建出来）
     int fd = open(filename,O_WRONLY|O_CREAT,0644);
     if (fd == -1) {
         redisLog(REDIS_WARNING,
@@ -421,7 +427,7 @@ int clusterLockConfig(char *filename) {
             filename, strerror(errno));
         return REDIS_ERR;
     }
-
+    //对文件加锁
     if (flock(fd,LOCK_EX|LOCK_NB) == -1) {
         if (errno == EWOULDBLOCK) {
             redisLog(REDIS_WARNING,
@@ -446,7 +452,7 @@ void clusterInit(void) {
     int saveconf = 0;
 
     // 初始化配置
-    server.cluster = zmalloc(sizeof(clusterState));
+    server.cluster = zmalloc(sizeof(clusterState));//为server.cluster分配内存
     server.cluster->myself = NULL;
     server.cluster->currentEpoch = 0;
     server.cluster->state = REDIS_CLUSTER_FAIL;
@@ -462,23 +468,26 @@ void clusterInit(void) {
     server.cluster->lastVoteEpoch = 0;
     server.cluster->stats_bus_messages_sent = 0;
     server.cluster->stats_bus_messages_received = 0;
-    memset(server.cluster->slots,0, sizeof(server.cluster->slots));
+    memset(server.cluster->slots,0, sizeof(server.cluster->slots));//都初始化为0
     clusterCloseAllSlots();
 
     /* Lock the cluster config file to make sure every node uses
      * its own nodes.conf. */
+    //锁住配置文件
     if (clusterLockConfig(server.cluster_configfile) == REDIS_ERR)
         exit(1);
 
     /* Load or create a new nodes configuration. */
+    //加载配置文件
     if (clusterLoadConfig(server.cluster_configfile) == REDIS_ERR) {
         /* No configuration found. We will just use the random name provided
          * by the createClusterNode() function. */
+        //此时没有配置文件，先为myself创建出节点
         myself = server.cluster->myself =
             createClusterNode(NULL,REDIS_NODE_MYSELF|REDIS_NODE_MASTER);
         redisLog(REDIS_NOTICE,"No cluster configuration found, I'm %.40s",
             myself->name);
-        clusterAddNode(myself);
+        clusterAddNode(myself); //添加myself到集群中
         saveconf = 1;
     }
 
@@ -492,6 +501,7 @@ void clusterInit(void) {
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
      * us from trying to use a too-high cluster port number. */
+    //端口号会自动加10000，所以加1w前不能超过65535
     if (server.port > (65535-REDIS_CLUSTER_PORT_INCR)) {
         redisLog(REDIS_WARNING, "Redis port number too high. "
                    "Cluster communication port is 10,000 port "
@@ -501,13 +511,14 @@ void clusterInit(void) {
         exit(1);
     }
 
+    //开始监听.让server.cfd[16]中每个fd都监听在这个端口上
     if (listenToPort(server.port+REDIS_CLUSTER_PORT_INCR,
         server.cfd,&server.cfd_count) == REDIS_ERR)
     {
         exit(1);
     } else {
         int j;
-
+        //为每个cfd都关联监听事件处理器
         for (j = 0; j < server.cfd_count; j++) {
             // 关联监听事件处理器
             if (aeCreateFileEvent(server.el, server.cfd[j], AE_READABLE,
@@ -547,9 +558,11 @@ void clusterReset(int hard) {
     resetManualFailover();
 
     /* Unassign all the slots. */
+    //slot分配为空
     for (j = 0; j < REDIS_CLUSTER_SLOTS; j++) clusterDelSlot(j);
 
     /* Forget all the nodes, but myself. */
+    //删除所有节点，除了myself
     di = dictGetSafeIterator(server.cluster->nodes);
     while((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
@@ -569,11 +582,12 @@ void clusterReset(int hard) {
 
         /* To change the Node ID we need to remove the old name from the
          * nodes table, change the ID, and re-add back with new name. */
+        //换个名字
         oldname = sdsnewlen(myself->name, REDIS_CLUSTER_NAMELEN);
         dictDelete(server.cluster->nodes,oldname);
         sdsfree(oldname);
-        getRandomHexChars(myself->name, REDIS_CLUSTER_NAMELEN);
-        clusterAddNode(myself);
+        getRandomHexChars(myself->name, REDIS_CLUSTER_NAMELEN);//新的随机名字
+        clusterAddNode(myself);//添加myself到集群
     }
 
     /* Make sure to persist the new config and update the state. */
@@ -586,7 +600,7 @@ void clusterReset(int hard) {
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
 
-// 创建节点连接
+// 创建节点连接, link->node=node
 clusterLink *createClusterLink(clusterNode *node) {
     clusterLink *link = zmalloc(sizeof(*link));
     link->ctime = mstime();
@@ -629,7 +643,7 @@ void freeClusterLink(clusterLink *link) {
 #define MAX_CLUSTER_ACCEPTS_PER_CALL 1000
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
-    int max = MAX_CLUSTER_ACCEPTS_PER_CALL;
+    int max = MAX_CLUSTER_ACCEPTS_PER_CALL; //1000
     char cip[REDIS_IP_STR_LEN];
     clusterLink *link;
     REDIS_NOTUSED(el);
@@ -641,15 +655,15 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (server.masterhost == NULL && server.loading) return;
 
     while(max--) {
-        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
+        cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);//接受一个tcp连接,记录在cfd中
         if (cfd == ANET_ERR) {
             if (errno != EWOULDBLOCK)
                 redisLog(REDIS_VERBOSE,
                     "Accepting cluster node: %s", server.neterr);
             return;
         }
-        anetNonBlock(NULL,cfd);
-        anetEnableTcpNoDelay(NULL,cfd);
+        anetNonBlock(NULL,cfd);//设置为非阻塞
+        anetEnableTcpNoDelay(NULL,cfd);//设置为no-delay
 
         /* Use non-blocking I/O for cluster messages. */
         redisLog(REDIS_VERBOSE,"Accepted cluster node %s:%d", cip, cport);
@@ -658,9 +672,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
          * Initiallly the link->node pointer is set to NULL as we don't know
          * which node is, but the right node is references once we know the
          * node identity. */
+        //创建一个ClusterLink，并关联到cfd上
         link = createClusterLink(NULL);
         link->fd = cfd;
-        aeCreateFileEvent(server.el,cfd,AE_READABLE,clusterReadHandler,link);
+        aeCreateFileEvent(server.el,cfd,AE_READABLE,clusterReadHandler,link);//为cfd关联读事件处理器
     }
 }
 
