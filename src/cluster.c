@@ -685,11 +685,10 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
 /* We have 16384 hash slots. The hash slot of a given key is obtained
  * as the least significant 14 bits of the crc16 of the key.
- *
  * However if the key contains the {...} pattern, only the part between
  * { and } is hashed. This may be useful in the future to force certain
  * keys to be in the same node (assuming no resharding is in progress). */
-// 计算给定键应该被分配到那个槽
+// 计算给定键应该被分配到那个槽。进行crc16计算，然后取低14位
 unsigned int keyHashSlot(char *key, int keylen) {
     int s, e; /* start-end indexes of { and } */
 
@@ -697,7 +696,7 @@ unsigned int keyHashSlot(char *key, int keylen) {
         if (key[s] == '{') break;
 
     /* No '{' ? Hash the whole key. This is the base case. */
-    if (s == keylen) return crc16(key,keylen) & 0x3FFF;
+    if (s == keylen) return crc16(key,keylen) & 0x3FFF;//返回低14位
 
     /* '{' found? Check if we have the corresponding '}'. */
     for (e = s+1; e < keylen; e++)
@@ -716,27 +715,22 @@ unsigned int keyHashSlot(char *key, int keylen) {
  * -------------------------------------------------------------------------- */
 
 /* Create a new cluster node, with the specified flags.
- *
  * 创建一个带有指定 flag 的集群节点。
- *
  * If "nodename" is NULL this is considered a first handshake and a random
  * node name is assigned to this node (it will be fixed later when we'll
  * receive the first pong).
- *
  * 如果 nodename 参数为 NULL ，那么表示我们尚未向节点发送 PING ，
- * 集群会为节点设置一个随机的命令，
- * 这个命令在之后接收到节点的 PONG 回复之后就会被更新。
- *
+ * 集群会为节点设置一个随机的名字，
+ * 这个名字在之后接收到节点的 PONG 回复之后就会被更新。
  * The node is created and returned to the user, but it is not automatically
  * added to the nodes hash table. 
- *
  * 函数会返回被创建的节点，但不会自动将它添加到当前节点的节点哈希表中
  * （nodes hash table）。
  */
 clusterNode *createClusterNode(char *nodename, int flags) {
     clusterNode *node = zmalloc(sizeof(*node));
 
-    // 设置名字
+    // 有名字则设置名字，无名字那么随机设置名字
     if (nodename)
         memcpy(node->name, nodename, REDIS_CLUSTER_NAMELEN);
     else
@@ -766,31 +760,23 @@ clusterNode *createClusterNode(char *nodename, int flags) {
 }
 
 /* This function is called every time we get a failure report from a node.
- *
  * 这个函数会在当前节点接到某个节点的下线报告时调用。
- *
  * The side effect is to populate the fail_reports list (or to update
  * the timestamp of an existing report).
- *
  * 函数的作用就是将下线节点的下线报告添加到 fail_reports 列表，
  * 如果这个下线节点的下线报告已经存在，
  * 那么更新该报告的时间戳。
- *
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
- *
  * failing 参数指向下线节点，而 sender 参数则指向报告 failing 已下线的节点。
- *
  * The function returns 0 if it just updates a timestamp of an existing
  * failure report from the same sender. 1 is returned if a new failure
  * report is created. 
- *
  * 函数返回 0 表示对已存在的报告进行了更新，
  * 返回 1 则表示创建了一条新的下线报告。
  */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
-
-    // 指向保存下线报告的链表
+    // 指向保存下线报告的链表。每个node都保存一个fail_reports记录其它节点认为该节点已下线的报告
     list *l = failing->fail_reports;
 
     listNode *ln;
@@ -803,7 +789,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     listRewind(l,&li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
-        // 如果存在的话，那么只更新该报告的时间戳
+        // 如果sender节点存在的话，那么只更新该报告的时间戳
         if (fr->node == sender) {
             fr->time = mstime();
             return 0;
@@ -816,7 +802,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     fr->node = sender;
     fr->time = mstime();
 
-    // 将报告添加到列表
+    // 将报告添加到链表中
     listAddNodeTail(l,fr);
 
     return 1;
@@ -827,17 +813,15 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
  * flagged as FAIL we need to have a local PFAIL state that is at least
  * older than the global node timeout, so we don't just trust the number
  * of failure reports from other nodes. 
- *
  * 移除对 node 节点的过期的下线报告，
  * 多长时间为过期是根据 node timeout 选项的值来决定的。
- *
  * 注意，
  * 要将一个节点标记为 FAIL 状态，
  * 当前节点将 node 标记为 PFAIL 状态的时间至少应该超过 node timeout ，
  * 所以报告 node 已下线的节点数量并不是当前节点将 node 标记为 FAIL 的唯一条件。
  */
+//删除过期下线报告
 void clusterNodeCleanupFailureReports(clusterNode *node) {
-
     // 指向该节点的所有下线报告
     list *l = node->fail_reports;
 
@@ -862,29 +846,24 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
 /* Remove the failing report for 'node' if it was previously considered
  * failing by 'sender'. This function is called when a node informs us via
  * gossip that a node is OK from its point of view (no FAIL or PFAIL flags).
- *
  * 从 node 节点的下线报告中移除 sender 对 node 的下线报告。
- *
  * 这个函数在以下情况使用：当前节点认为 node 已下线（FAIL 或者 PFAIL），
  * 但 sender 却向当前节点发来报告，说它认为 node 节点没有下线，
  * 那么当前节点就要移除 sender 对 node 的下线报告 
  * —— 如果 sender 曾经报告过 node 下线的话。
- *
  * Note that this function is called relatively often as it gets called even
  * when there are no nodes failing, and is O(N), however when the cluster is
  * fine the failure reports list is empty so the function runs in constant
  * time.
- *
  * 即使在节点没有下线的情况下，这个函数也会被调用，并且调用的次数还比较频繁。
  * 在一般情况下，这个函数的复杂度为 O(N) ，
  * 不过在不存在下线报告的情况下，这个函数的复杂度仅为常数时间。
- *
  * The function returns 1 if the failure report was found and removed.
  * Otherwise 0 is returned. 
- *
  * 函数返回 1 表示下线报告已经被成功移除，
  * 0 表示 sender 没有发送过 node 的下线报告，删除失败。
  */
+//删除sender对node的下线报告
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     list *l = node->fail_reports;
     listNode *ln;
@@ -896,7 +875,7 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     listRewind(l,&li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
-        if (fr->node == sender) break;
+        if (fr->node == sender) break;//找到sender了，跳出循环
     }
     // sender 没有报告过 node 下线，直接返回
     if (!ln) return 0; /* No failure report from this sender. */
@@ -913,12 +892,11 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
 /* Return the number of external nodes that believe 'node' is failing,
  * not including this node, that may have a PFAIL or FAIL state for this
  * node as well. 
- *
  * 计算不包括本节点在内的，
  * 将 node 标记为 PFAIL 或者 FAIL 的节点的数量。
  */
+//先移除过期下线报告，返回下线报告的数量
 int clusterNodeFailureReportsCount(clusterNode *node) {
-
     // 移除过期的下线报告
     clusterNodeCleanupFailureReports(node);
 
@@ -952,22 +930,22 @@ int clusterNodeAddSlave(clusterNode *master, clusterNode *slave) {
     for (j = 0; j < master->numslaves; j++)
         if (master->slaves[j] == slave) return REDIS_ERR;
 
-    // 将 slave 添加到 slaves 数组里面
+    // 将 slave 添加到 slaves 数组里面。realloc内存，多分配一个节点的内存
     master->slaves = zrealloc(master->slaves,
         sizeof(clusterNode*)*(master->numslaves+1));
     master->slaves[master->numslaves] = slave;
-    master->numslaves++;
+    master->numslaves++;//增加从节点计数
 
     return REDIS_OK;
 }
 
-// 重置给定节点的从节点名单
+// 重置给定节点的从节点名单。释放slaves数组
 void clusterNodeResetSlaves(clusterNode *n) {
     zfree(n->slaves);
     n->numslaves = 0;
     n->slaves = NULL;
 }
-
+//统计n的slaves中没有fail的节点数量
 int clusterCountNonFailingSlaves(clusterNode *n) {
     int j, okslaves = 0;
 
@@ -986,7 +964,7 @@ void freeClusterNode(clusterNode *n) {
     redisAssert(dictDelete(server.cluster->nodes,nodename) == DICT_OK);
     sdsfree(nodename);
 
-    // 移除从节点
+    // 移除所有从节点
     if (n->slaveof) clusterNodeRemoveSlave(n->slaveof, n);
 
     // 释放连接
@@ -1011,9 +989,7 @@ int clusterAddNode(clusterNode *node) {
 }
 
 /* Remove a node from the cluster:
- *
  * 从集群中移除一个节点：
- *
  * 1) Mark all the nodes handled by it as unassigned.
  *    将所有由该节点负责的槽全部设置为未分配
  * 2) Remove all the failure reports sent by this node.
