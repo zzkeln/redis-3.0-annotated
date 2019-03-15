@@ -22,7 +22,7 @@
  * 以下是和时间有关的一些常量，
  * 以 _MULTI 结尾的常量会作为时间值的乘法因子来使用。
  */
-// 默认节点超时时限
+// 默认节点超时时限：15s
 #define REDIS_CLUSTER_DEFAULT_NODE_TIMEOUT 15000
 // 检验下线报告的乘法因子
 #define REDIS_CLUSTER_FAIL_REPORT_VALIDITY_MULT 2 /* Fail report validity. */
@@ -57,11 +57,9 @@
 // 前置定义，防止编译错误
 struct clusterNode;
 
-
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 // clusterLink 包含了与其他节点进行通讯所需的全部信息
 typedef struct clusterLink {
-
     // 连接的创建时间
     mstime_t ctime;             /* Link creation time */
 
@@ -242,6 +240,7 @@ typedef struct clusterState {
     // 跳跃表，表中以槽作为分值，键作为成员，对槽进行有序排序
     // 当需要对某些槽进行区间（range）操作时，这个跳跃表可以提供方便
     // 具体操作定义在 db.c 里面
+    // key是键，score是槽。这样range命令可以知道某个槽的所有键
     zskiplist *slots_to_keys;
 
     /* The following fields are used to take the slave state on elections. */
