@@ -1067,50 +1067,44 @@ void clusterRenameNode(clusterNode *node, char *newname) {
     int retval;
     sds s = sdsnewlen(node->name, REDIS_CLUSTER_NAMELEN);
 
+    //从nodes删除node
     redisLog(REDIS_DEBUG,"Renaming node %.40s into %.40s",
         node->name, newname);
     retval = dictDelete(server.cluster->nodes, s);
     sdsfree(s);
     redisAssert(retval == DICT_OK);
+    //将newname赋值给node，然后添加到cluster->nodes中
     memcpy(node->name, newname, REDIS_CLUSTER_NAMELEN);
     clusterAddNode(node);
 }
 
 /* -----------------------------------------------------------------------------
  * CLUSTER nodes blacklist
- *
  * 集群节点黑名单
- *
+ 
  * The nodes blacklist is just a way to ensure that a given node with a given
  * Node ID is not readded before some time elapsed (this time is specified
  * in seconds in REDIS_CLUSTER_BLACKLIST_TTL).
- *
  * 黑名单用于禁止一个给定的节点在 REDIS_CLUSTER_BLACKLIST_TTL 指定的时间内，
  * 被重新添加到集群中。
- *
  * This is useful when we want to remove a node from the cluster completely:
  * when CLUSTER FORGET is called, it also puts the node into the blacklist so
  * that even if we receive gossip messages from other nodes that still remember
  * about the node we want to remove, we don't re-add it before some time.
- *
  * 当我们需要从集群中彻底移除一个节点时，就需要用到黑名单：
  * 在执行 CLUSTER FORGET 命令时，节点会被添加进黑名单里面，
  * 这样即使我们从仍然记得被移除节点的其他节点那里收到关于被移除节点的消息，
  * 我们也不会重新将被移除节点添加至集群。
- *
  * Currently the REDIS_CLUSTER_BLACKLIST_TTL is set to 1 minute, this means
  * that redis-trib has 60 seconds to send CLUSTER FORGET messages to nodes
  * in the cluster without dealing with the problem of other nodes re-adding
  * back the node to nodes we already sent the FORGET command to.
- *
  * REDIS_CLUSTER_BLACKLIST_TTL 当前的值为 1 分钟，
  * 这意味着 redis-trib 有 60 秒的时间，可以向集群中的所有节点发送 CLUSTER FORGET
  * 命令，而不必担心有其他节点会将被 CLUSTER FORGET 移除的节点重新添加到集群里面。
- *
  * The data structure used is a hash table with an sds string representing
  * the node ID as key, and the time when it is ok to re-add the node as
  * value.
- *
  * 黑名单的底层实现是一个字典，
  * 字典的键为 SDS 表示的节点 id ，字典的值为可以重新添加节点的时间戳。
  * -------------------------------------------------------------------------- */
@@ -1122,26 +1116,23 @@ void clusterRenameNode(clusterNode *node, char *newname) {
  * entries from the black list. This is an O(N) operation but it is not a
  * problem since add / exists operations are called very infrequently and
  * the hash table is supposed to contain very little elements at max.
- *
  * 在执行 addNode() 操作或者 Exists() 操作之前，
  * 我们总是会先执行这个函数，移除黑名单中的过期节点。
- *
  * 这个函数的复杂度为 O(N) ，不过它不会对效率产生影响，
  * 因为这个函数执行的次数并不频繁，并且字典的链表里面包含的节点数量也非常少。
- *
  * However without the cleanup during long uptimes and with some automated
  * node add/removal procedures, entries could accumulate. 
- *
  * 定期清理过期节点是为了防止字典中的节点堆积过多。
  */
+//清楚黑名单中的过期节点
 void clusterBlacklistCleanup(void) {
     dictIterator *di;
     dictEntry *de;
 
-    // 遍历黑名单中的所有节点
+    // 遍历黑名单中的所有节点。键是node*，值是过期时间
     di = dictGetSafeIterator(server.cluster->nodes_black_list);
     while((de = dictNext(di)) != NULL) {
-        int64_t expire = dictGetUnsignedIntegerVal(de);
+        int64_t expire = dictGetUnsignedIntegerVal(de); 
 
         // 删除过期节点
         if (expire < server.unixtime)
@@ -1165,7 +1156,7 @@ void clusterBlacklistAddNode(clusterNode *node) {
          * the key for the next lookup. We'll free it at the end. */
         id = sdsdup(id);
     }
-    // 设置过期时间
+    // 设置过期时间为当前时间+60s
     de = dictFind(server.cluster->nodes_black_list,id);
     dictSetUnsignedIntegerVal(de,time(NULL)+REDIS_CLUSTER_BLACKLIST_TTL);
     sdsfree(id);
@@ -1177,7 +1168,6 @@ void clusterBlacklistAddNode(clusterNode *node) {
 // 检查给定 id 所指定的节点是否存在于黑名单中。
 // nodeid 参数不必是一个 SDS 值，只要一个 40 字节长的字符串即可
 int clusterBlacklistExists(char *nodeid) {
-
     // 构建 SDS 表示的节点名
     sds id = sdsnewlen(nodeid,REDIS_CLUSTER_NAMELEN);
     int retval;
@@ -1198,29 +1188,22 @@ int clusterBlacklistExists(char *nodeid) {
 
 /* This function checks if a given node should be marked as FAIL.
  * It happens if the following conditions are met:
- *
  * 此函数用于判断是否需要将 node 标记为 FAIL 。
- *
  * 将 node 标记为 FAIL 需要满足以下两个条件：
- *
  * 1) We received enough failure reports from other master nodes via gossip.
  *    Enough means that the majority of the masters signaled the node is
  *    down recently.
  *    有半数以上的主节点将 node 标记为 PFAIL 状态。
  * 2) We believe this node is in PFAIL state.
  *    当前节点也将 node 标记为 PFAIL 状态。
- *
  * If a failure is detected we also inform the whole cluster about this
  * event trying to force every other node to set the FAIL flag for the node.
- *
  * 如果确认 node 已经进入了 FAIL 状态，
  * 那么节点还会向其他节点发送 FAIL 消息，让其他节点也将 node 标记为 FAIL 。
- *
  * Note that the form of agreement used here is weak, as we collect the majority
  * of masters state during some time, and even if we force agreement by
  * propagating the FAIL message, because of partitions we may not reach every
  * node. However:
- *
  * 注意，集群判断一个 node 进入 FAIL 所需的条件是弱（weak）的，
  * 因为节点们对 node 的状态报告并不是实时的，而是有一段时间间隔
  * （这段时间内 node 的状态可能已经发生了改变），
