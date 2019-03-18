@@ -2772,20 +2772,16 @@ void clusterSendPing(clusterLink *link, int type) {
 
 /* Send a PONG packet to every connected node that's not in handshake state
  * and for which we have a valid link.
- *
  * 向所有未在 HANDSHAKE 状态，并且连接正常的节点发送 PONG 回复。
- *
  * In Redis Cluster pongs are not used just for failure detection, but also
  * to carry important configuration information. So broadcasting a pong is
  * useful when something changes in the configuration and we want to make
  * the cluster aware ASAP (for instance after a slave promotion). *
  * 在集群中， PONG 不仅可以用来检测节点状态，
  * 还可以携带一些重要的信息。
- *
  * 因此广播 PONG 回复在配置发生变化（比如从节点转变为主节点），
  * 并且当前节点想让其他节点尽快知悉这一变化的时候，
  * 就会广播 PONG 回复。
- *
  * The 'target' argument specifies the receiving instances using the
  * defines below:
  *
@@ -2819,13 +2815,11 @@ void clusterBroadcastPong(int target) {
 }
 
 /* Send a PUBLISH message.
- *
  * 发送一条 PUBLISH 消息。
- *
  * If link is NULL, then the message is broadcasted to the whole cluster. 
- *
  * 如果 link 参数为 NULL ，那么将消息广播给整个集群。
  */
+//这里有个优化，如果数据比较小的话用栈上的buffer，否则堆上申请内存
 void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
     unsigned char buf[sizeof(clusterMsg)], *payload;
     clusterMsg *hdr = (clusterMsg*) buf;
@@ -2852,9 +2846,11 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
     hdr->totlen = htonl(totlen);
 
     /* Try to use the local buffer if possible */
+    //数据比较小，用栈上的Buffer
     if (totlen < sizeof(buf)) {
         payload = buf;
     } else {
+        //数据比较大，用堆上空间
         payload = zmalloc(totlen);
         memcpy(payload,hdr,sizeof(*hdr));
         hdr = (clusterMsg*) payload;
@@ -2877,14 +2873,11 @@ void clusterSendPublish(clusterLink *link, robj *channel, robj *message) {
 }
 
 /* Send a FAIL message to all the nodes we are able to contact.
- *
  * 向当前节点已知的所有节点发送 FAIL 信息。
- *
  * The FAIL message is sent when we detect that a node is failing
  * (REDIS_NODE_PFAIL) and we also receive a gossip confirmation of this:
  * we switch the node state to REDIS_NODE_FAIL and ask all the other
  * nodes to do the same ASAP. 
- *
  * 如果当前节点将 node 标记为 PFAIL 状态，
  * 并且通过 gossip 协议，
  * 从足够数量的节点那些得到了 node 已经下线的支持， 
@@ -2909,7 +2902,6 @@ void clusterSendFail(char *nodename) {
 /* Send an UPDATE message to the specified link carrying the specified 'node'
  * slots configuration. The node name, slots bitmap, and configEpoch info
  * are included. 
- *
  * 向连接 link 发送包含给定 node 槽配置的 UPDATE 消息，
  * 包括节点名称，槽位图，以及配置纪元。
  */
@@ -2954,13 +2946,10 @@ void clusterPropagatePublish(robj *channel, robj *message) {
 /* This function sends a FAILOVE_AUTH_REQUEST message to every node in order to
  * see if there is the quorum for this slave instance to failover its failing
  * master.
- *
  * 向其他所有节点发送 FAILOVE_AUTH_REQUEST 信息，
  * 看它们是否同意由这个从节点来对下线的主节点进行故障转移。
- *
  * Note that we send the failover request to everybody, master and slave nodes,
  * but only the masters are supposed to reply to our query. 
- *
  * 信息会被发送给所有节点，包括主节点和从节点，但只有主节点会回复这条信息。 
  */
 void clusterRequestFailoverAuth(void) {
@@ -2977,7 +2966,7 @@ void clusterRequestFailoverAuth(void) {
     totlen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
     hdr->totlen = htonl(totlen);
 
-    // 发送信息
+    // 发送信息给所有已知节点
     clusterBroadcastMessage(buf,totlen);
 }
 
@@ -3012,7 +3001,6 @@ void clusterSendMFStart(clusterNode *node) {
 /* Vote for the node asking for our vote if there are the conditions. */
 // 在条件满足的情况下，为请求进行故障转移的节点 node 进行投票，支持它进行故障转移
 void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
-
     // 请求节点的主节点
     clusterNode *master = node->slaveof;
 
@@ -3099,6 +3087,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
  * The slave rank is used to add a delay to start an election in order to
  * get voted and replace a failing master. Slaves with better replication
  * offsets are more likely to win. */
+//当前节点必须是从节点，对它所属主节点下的所有从节点按照复制偏移量进行排序，返回当前节点的rank值
 int clusterGetSlaveRank(void) {
     long long myoffset;
     int j, rank = 0;
@@ -3108,7 +3097,7 @@ int clusterGetSlaveRank(void) {
     master = myself->slaveof;
     if (master == NULL) return 0; /* Never called by slaves without master. */
 
-    myoffset = replicationGetSlaveOffset();
+    myoffset = replicationGetSlaveOffset();//获得复制偏移量
     for (j = 0; j < master->numslaves; j++)
         if (master->slaves[j] != myself &&
             master->slaves[j]->repl_offset > myoffset) rank++;
@@ -3117,14 +3106,10 @@ int clusterGetSlaveRank(void) {
 
 /* This function is called if we are a slave node and our master serving
  * a non-zero amount of hash slots is in FAIL state.
- *
  * 如果当前节点是一个从节点，并且它正在复制的一个负责非零个槽的主节点处于 FAIL 状态，
  * 那么执行这个函数。
- *
  * The gaol of this function is:
- *
  * 这个函数有三个目标：
- *
  * 1) To check if we are able to perform a failover, is our data updated?
  *    检查是否可以对主节点执行一次故障转移，节点的关于主节点的信息是否准确和最新（updated）？
  * 2) Try to get elected by masters.
@@ -3799,12 +3784,10 @@ void clusterCron(void) {
  * reaction to events fired but that are not safe to perform inside event
  * handlers, or to perform potentially expansive tasks that we need to do
  * a single time before replying to clients. 
- *
  * 在进入下个事件循环时调用。
  * 这个函数做的事都是需要尽快执行，但是不能在执行文件事件期间做的事情。
  */
 void clusterBeforeSleep(void) {
-
     /* Handle failover, this is needed when it is likely that there is already
      * the quorum from masters in order to react fast. */
     // 执行故障迁移
@@ -3838,7 +3821,6 @@ void clusterDoBeforeSleep(int flags) {
 /* -----------------------------------------------------------------------------
  * Slots management
  * -------------------------------------------------------------------------- */
-
 /* Test bit 'pos' in a generic bitmap. Return 1 if the bit is set,
  * otherwise 0. */
 // 检查位图 bitmap 的 pos 位置是否已经被设置
@@ -3897,31 +3879,25 @@ int clusterNodeGetSlotBit(clusterNode *n, int slot) {
 // 添加成功返回 REDIS_OK ,如果槽已经由这个节点处理了
 // 那么返回 REDIS_ERR 。
 int clusterAddSlot(clusterNode *n, int slot) {
-
     // 槽 slot 已经是节点 n 处理的了
     if (server.cluster->slots[slot]) return REDIS_ERR;
 
-    // 设置 bitmap
+    // 设置 bitmap：n处理slot
     clusterNodeSetSlotBit(n,slot);
 
-    // 更新集群状态
+    // 更新集群状态：slot被n处理
     server.cluster->slots[slot] = n;
 
     return REDIS_OK;
 }
 
 /* Delete the specified slot marking it as unassigned.
- *
  * 将指定槽标记为未分配（unassigned）。
- *
  * Returns REDIS_OK if the slot was assigned, otherwise if the slot was
  * already unassigned REDIS_ERR is returned. 
- *
- * 标记成功返回 REDIS_OK ，
- * 如果槽已经是未分配的，那么返回 REDIS_ERR 。
+ * 标记成功返回 REDIS_OK ，如果槽已经是未分配的，那么返回 REDIS_ERR 。
  */
 int clusterDelSlot(int slot) {
-
     // 获取当前处理槽 slot 的节点 n
     clusterNode *n = server.cluster->slots[slot];
 
@@ -3964,7 +3940,6 @@ void clusterCloseAllSlots(void) {
 /* -----------------------------------------------------------------------------
  * Cluster state evaluation function
  * -------------------------------------------------------------------------- */
-
 /* The following are defines that are only used in the evaluation function
  * and are based on heuristics. Actaully the main point about the rejoin and
  * writable delay is that they should be a few orders of magnitude larger
@@ -4162,7 +4137,6 @@ int verifyClusterConfigWithData(void) {
 /* -----------------------------------------------------------------------------
  * SLAVE nodes handling
  * -------------------------------------------------------------------------- */
-
 /* Set the specified node 'n' as master for this node.
  * If this node is currently a master, it is turned into a slave. */
 // 将节点 n 设置为当前节点的主节点
@@ -4192,10 +4166,8 @@ void clusterSetMaster(clusterNode *n) {
 /* -----------------------------------------------------------------------------
  * CLUSTER command
  * -------------------------------------------------------------------------- */
-
 /* Generate a csv-alike representation of the specified cluster node.
  * See clusterGenNodesDescription() top comment for more information.
- *
  * The function returns the string representation as an SDS string. */
 // 生成节点的状态描述信息
 sds clusterGenNodeDescription(clusterNode *node) {
@@ -4273,23 +4245,18 @@ sds clusterGenNodeDescription(clusterNode *node) {
 /* Generate a csv-alike representation of the nodes we are aware of,
  * including the "myself" node, and return an SDS string containing the
  * representation (it is up to the caller to free it).
- *
  * 以 csv 格式记录当前节点已知所有节点的信息（包括当前节点自身），
  * 这些信息被保存到一个 sds 里面，并作为函数值返回。
- *
  * All the nodes matching at least one of the node flags specified in
  * "filter" are excluded from the output, so using zero as a filter will
  * include all the known nodes in the representation, including nodes in
  * the HANDSHAKE state.
- *
  * filter 参数可以用来指定节点的 flag 标识，
  * 带有被指定标识的节点不会被记录在输出结构中，
  * filter 为 0 表示记录所有节点的信息，包括 HANDSHAKE 状态的节点。
- *
  * The representation obtained using this function is used for the output
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. 
- *
  * 这个函数生成的结果会被用于 CLUSTER NODES 命令，
  * 以及用于生成 nodes.conf 配置文件。
  */
@@ -4331,7 +4298,6 @@ int getSlotOrReply(redisClient *c, robj *o) {
 
 // CLUSTER 命令的实现
 void clusterCommand(redisClient *c) {
-
     // 不能在非集群模式下使用该命令
     if (server.cluster_enabled == 0) {
         addReplyError(c,"This instance has cluster support disabled");
@@ -4376,7 +4342,6 @@ void clusterCommand(redisClient *c) {
     } else if (!strcasecmp(c->argv[1]->ptr,"flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
         // 删除当前节点的所有槽，让它变为不处理任何槽
-
         // 删除槽必须在数据库为空的情况下进行
         if (dictSize(server.db[0].dict) != 0) {
             addReplyError(c,"DB must be empty to perform CLUSTER FLUSHSLOTS.");
@@ -4933,7 +4898,6 @@ void clusterCommand(redisClient *c) {
 
 /* Generates a DUMP-format representation of the object 'o', adding it to the
  * io stream pointed by 'rio'. This function can't fail. 
- *
  * 创建对象 o 的一个 DUMP 格式表示，
  * 并将它添加到 rio 指针指向的 io 流当中。
  */
