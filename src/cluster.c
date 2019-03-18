@@ -315,6 +315,7 @@ int clusterLoadConfig(char *filename) {
     }
     zfree(line);
     fclose(fp);
+    
 
     /* Config sanity check */
     redisAssert(server.cluster->myself != NULL);
