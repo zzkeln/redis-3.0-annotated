@@ -764,16 +764,14 @@ clusterNode *createClusterNode(char *nodename, int flags) {
  * The side effect is to populate the fail_reports list (or to update
  * the timestamp of an existing report).
  * 函数的作用就是将下线节点的下线报告添加到 fail_reports 列表，
- * 如果这个下线节点的下线报告已经存在，
- * 那么更新该报告的时间戳。
+ * 如果这个下线节点的下线报告已经存在，那么更新该报告的时间戳。
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
  * failing 参数指向下线节点，而 sender 参数则指向报告 failing 已下线的节点。
  * The function returns 0 if it just updates a timestamp of an existing
  * failure report from the same sender. 1 is returned if a new failure
  * report is created. 
- * 函数返回 0 表示对已存在的报告进行了更新，
- * 返回 1 则表示创建了一条新的下线报告。
+ * 函数返回 0 表示对已存在的报告进行了更新，返回 1 则表示创建了一条新的下线报告。
  */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     // 指向保存下线报告的链表。每个node都保存一个fail_reports记录其它节点认为该节点已下线的报告
@@ -838,7 +836,7 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
     listRewind(l,&li);
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
-        // 删除过期报告
+        // 删除过期报告，从链表中移除节点
         if (now - fr->time > maxtime) listDelNode(l,ln);
     }
 }
