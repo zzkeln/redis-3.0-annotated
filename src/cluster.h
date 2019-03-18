@@ -92,8 +92,7 @@ typedef struct clusterLink {
 #define REDIS_NODE_HANDSHAKE 32 /* We have still to exchange the first ping */
 // 该节点没有地址
 #define REDIS_NODE_NOADDR   64  /* We don't know the address of this node */
-// 当前节点还未与该节点进行过接触
-// 带有这个标识会让当前节点发送 MEET 命令而不是 PING 命令
+// 当前节点还未与该节点进行过接触：带有这个标识会让当前节点发送 MEET 命令而不是 PING 命令
 #define REDIS_NODE_MEET 128     /* Send a MEET message to this node */
 // 该节点被选中为新的主节点
 #define REDIS_NODE_PROMOTED 256 /* Master was a slave propoted by failover */
@@ -113,20 +112,16 @@ typedef struct clusterLink {
 // 每个 clusterNodeFailReport 结构保存了一条其他节点对目标节点的下线报告
 // （认为目标节点已经下线）
 struct clusterNodeFailReport {
-
     // 报告目标节点已经下线的节点
     struct clusterNode *node;  /* Node reporting the failure condition. */
 
-    // 最后一次从 node 节点收到下线报告的时间
-    // 程序使用这个时间戳来检查下线报告是否过期
+    // 最后一次从 node 节点收到下线报告的时间，程序使用这个时间戳来检查下线报告是否过期
     mstime_t time;             /* Time of the last report from this node. */
 
 } typedef clusterNodeFailReport;
 
-
 // 节点状态
 struct clusterNode {
-
     // 创建节点的时间
     mstime_t ctime; /* Node object creation time. */
 
@@ -155,8 +150,7 @@ struct clusterNode {
 
     // 如果本节点是主节点，那么用这个属性记录从节点的数量
     int numslaves;  /* Number of slave nodes, if this is a master */
-
-    // 指针数组，指向各个从节点
+    // 如果本节点是主节点，指针数组，指向各个从节点
     struct clusterNode **slaves; /* pointers to slave nodes */
 
     // 如果这是一个从节点，那么指向主节点
@@ -199,9 +193,8 @@ typedef struct clusterNode clusterNode;
 // 集群状态，每个节点都保存着一个这样的状态，记录了它们眼中的集群的样子。
 // 另外，虽然这个结构主要用于记录集群的属性，但是为了节约资源，
 // 有些与节点有关的属性，比如 slots_to_keys 、 failover_auth_count 
-// 也被放到了这个结构里面。
+// 也被放到了这个结构里面。记录集群状态。
 typedef struct clusterState {
-
     // 指向当前节点的指针
     clusterNode *myself;  /* This node */
 
@@ -237,8 +230,9 @@ typedef struct clusterState {
     // 例如 slots[i] = clusterNode_A 表示槽 i 由节点 A 处理
     clusterNode *slots[REDIS_CLUSTER_SLOTS];
 
-    // 跳跃表，表中以槽作为分值，键作为成员，对槽进行有序排序
-    // 当需要对某些槽进行区间（range）操作时，这个跳跃表可以提供方便
+    // 跳跃表。
+    // 跳跃表节点的成员是键，score是槽号，对槽进行有序排序
+    // 当需要对某些槽进行区间（range）操作时，这个跳跃表可以提供方便的操作
     // 具体操作定义在 db.c 里面
     // key是键，score是槽。这样range命令可以知道某个槽的所有键
     zskiplist *slots_to_keys;
@@ -336,7 +330,6 @@ typedef struct clusterState {
  * address for all the next messages. */
 
 typedef struct {
-
     // 节点的名字
     // 在刚开始的时候，节点的名字会是随机的
     // 当 MEET 信息发送并得到回复之后，集群就会为节点设置正式的名字
@@ -363,14 +356,11 @@ typedef struct {
 } clusterMsgDataGossip;
 
 typedef struct {
-
     // 下线节点的名字
     char nodename[REDIS_CLUSTER_NAMELEN];
-
 } clusterMsgDataFail;
 
 typedef struct {
-
     // 频道名长度
     uint32_t channel_len;
 
@@ -385,7 +375,6 @@ typedef struct {
 } clusterMsgDataPublish;
 
 typedef struct {
-
     // 节点的配置纪元
     uint64_t configEpoch; /* Config epoch of the specified instance. */
 
@@ -398,7 +387,6 @@ typedef struct {
 } clusterMsgDataUpdate;
 
 union clusterMsgData {
-
     /* PING, MEET and PONG */
     struct {
         /* Array of N clusterMsgDataGossip structures */
