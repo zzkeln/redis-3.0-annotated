@@ -448,7 +448,7 @@ int clusterLockConfig(char *filename) {
     return REDIS_OK;
 }
 
-// 初始化集群
+// 初始化集群状态clusterState
 void clusterInit(void) {
     int saveconf = 0;
 
@@ -502,7 +502,7 @@ void clusterInit(void) {
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
      * us from trying to use a too-high cluster port number. */
-    //端口号会自动加10000，所以加1w前不能超过65535
+    //端口号会自动加10000，所以加1w前不能超过55535
     if (server.port > (65535-REDIS_CLUSTER_PORT_INCR)) {
         redisLog(REDIS_WARNING, "Redis port number too high. "
                    "Cluster communication port is 10,000 port "
@@ -530,7 +530,7 @@ void clusterInit(void) {
     }
 
     /* The slots -> keys map is a sorted set. Init it. */
-    // slots -> keys 映射是一个有序集合
+    // slots -> keys 映射是一个skiplist
     server.cluster->slots_to_keys = zslCreate();
     resetManualFailover();
 }
@@ -555,7 +555,7 @@ void clusterReset(int hard) {
     }
 
     /* Close slots, reset manual failover state. */
-    clusterCloseAllSlots();
+    clusterCloseAllSlots();//将migrating_slots_to和importing_slots_from都设置为0
     resetManualFailover();
 
     /* Unassign all the slots. */
@@ -603,11 +603,11 @@ void clusterReset(int hard) {
 
 // 创建节点连接, link->node=node
 clusterLink *createClusterLink(clusterNode *node) {
-    clusterLink *link = zmalloc(sizeof(*link));
+    clusterLink *link = zmalloc(sizeof(*link));//为clusterLink分配内存
     link->ctime = mstime();
     link->sndbuf = sdsempty();
     link->rcvbuf = sdsempty();
-    link->node = node;
+    link->node = node;//设置关联的node
     link->fd = -1;
     return link;
 }
@@ -615,8 +615,7 @@ clusterLink *createClusterLink(clusterNode *node) {
 /* Free a cluster link, but does not free the associated node of course.
  * This function will just make sure that the original node associated
  * with this link will have the 'link' field set to NULL. */
-// 将给定的连接清空
-// 并将包含这个连接的节点的 link 属性设为 NULL
+// 将给定的连接清空，并将包含这个连接的节点的 link 属性设为 NULL
 void freeClusterLink(clusterLink *link) {
 
     // 删除事件处理器
