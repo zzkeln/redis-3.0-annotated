@@ -902,12 +902,11 @@ int clusterNodeFailureReportsCount(clusterNode *node) {
     return listLength(node->fail_reports);
 }
 
-// 移除主节点 master 的从节点 slave
+// 移除主节点 master 的某个从节点 slave
 int clusterNodeRemoveSlave(clusterNode *master, clusterNode *slave) {
     int j;
 
-    // 在 slaves 数组中找到从节点 slave 所属的主节点，
-    // 将主节点中的 slave 信息移除
+    // 在 slaves 数组中找到从节点 slave，将它移除
     for (j = 0; j < master->numslaves; j++) {
         if (master->slaves[j] == slave) {
             memmove(master->slaves+j,master->slaves+(j+1),
@@ -958,7 +957,7 @@ void freeClusterNode(clusterNode *n) {
 
     nodename = sdsnewlen(n->name, REDIS_CLUSTER_NAMELEN);
 
-    // 从 nodes 表中删除节点
+    // 从 nodes 字典中删除节点
     redisAssert(dictDelete(server.cluster->nodes,nodename) == DICT_OK);
     sdsfree(nodename);
 
@@ -999,12 +998,14 @@ int clusterAddNode(clusterNode *node) {
  *    如果它是一个从节点的话，
  *    还要在它的主节点的 slaves 表中清除关于这个节点的数据。
  */
+//从集群中移除一个节点：槽改为未分配，下线报告全删除，nodes字典全清除，如果是从节点需要从主节点的slaves中删除
 void clusterDelNode(clusterNode *delnode) {
     int j;
     dictIterator *di;
     dictEntry *de;
 
     /* 1) Mark slots as unassigned. */
+    //遍历16384
     for (j = 0; j < REDIS_CLUSTER_SLOTS; j++) {
         // 取消向该节点接收槽的计划
         if (server.cluster->importing_slots_from[j] == delnode)
@@ -1024,14 +1025,15 @@ void clusterDelNode(clusterNode *delnode) {
         clusterNode *node = dictGetVal(de);
 
         if (node == delnode) continue;
+        //删除delnode对node的下线报告
         clusterNodeDelFailureReport(node,delnode);
     }
     dictReleaseIterator(di);
 
     /* 3) Remove this node from its master's slaves if needed. */
-    // 将节点从它的主节点的从节点列表中移除
+    // 如果是从节点，将节点从它的主节点的从节点列表中移除
     if (nodeIsSlave(delnode) && delnode->slaveof)
-        clusterNodeRemoveSlave(delnode->slaveof,delnode);
+        clusterNodeRemoveSlave(delnode->slaveof,delnode);//从它的主节点的slaves中删除delnode
 
     /* 4) Free the node, unlinking it from the cluster. */
     // 释放节点
@@ -1044,7 +1046,7 @@ clusterNode *clusterLookupNode(char *name) {
     sds s = sdsnewlen(name, REDIS_CLUSTER_NAMELEN);
     dictEntry *de;
 
-    de = dictFind(server.cluster->nodes,s);
+    de = dictFind(server.cluster->nodes,s);//nodes字典里查找节点，并返回它
     sdsfree(s);
     if (de == NULL) return NULL;
     return dictGetVal(de);
@@ -1060,7 +1062,7 @@ clusterNode *clusterLookupNode(char *name) {
 // 当目标节点向发送节点返回 PONG 回复时
 // 发送节点就知道了目标节点的 IP 和 port
 // 这时发送节点就可以通过调用这个函数
-// 为目标节点改名
+// 为目标节点改名：先从nodes中删除旧名字对应的节点，然后rename，再将新名字-节点添加到nodes字典中
 void clusterRenameNode(clusterNode *node, char *newname) {
     int retval;
     sds s = sdsnewlen(node->name, REDIS_CLUSTER_NAMELEN);
@@ -1083,32 +1085,26 @@ void clusterRenameNode(clusterNode *node, char *newname) {
  * The nodes blacklist is just a way to ensure that a given node with a given
  * Node ID is not readded before some time elapsed (this time is specified
  * in seconds in REDIS_CLUSTER_BLACKLIST_TTL).
- * 黑名单用于禁止一个给定的节点在 REDIS_CLUSTER_BLACKLIST_TTL 指定的时间内，
- * 被重新添加到集群中。
+ * 黑名单用于禁止一个给定的节点在 REDIS_CLUSTER_BLACKLIST_TTL 指定的时间内，被重新添加到集群中。
  * This is useful when we want to remove a node from the cluster completely:
  * when CLUSTER FORGET is called, it also puts the node into the blacklist so
  * that even if we receive gossip messages from other nodes that still remember
  * about the node we want to remove, we don't re-add it before some time.
- * 当我们需要从集群中彻底移除一个节点时，就需要用到黑名单：
- * 在执行 CLUSTER FORGET 命令时，节点会被添加进黑名单里面，
- * 这样即使我们从仍然记得被移除节点的其他节点那里收到关于被移除节点的消息，
- * 我们也不会重新将被移除节点添加至集群。
+ * 当我们需要从集群中彻底移除一个节点时，就需要用到黑名单：在执行 CLUSTER FORGET 命令时，节点会被添加进黑名单里面，
+ * 这样即使我们从仍然记得被移除节点的其他节点那里收到关于被移除节点的消息，我们也不会重新将被移除节点添加至集群。
  * Currently the REDIS_CLUSTER_BLACKLIST_TTL is set to 1 minute, this means
  * that redis-trib has 60 seconds to send CLUSTER FORGET messages to nodes
  * in the cluster without dealing with the problem of other nodes re-adding
  * back the node to nodes we already sent the FORGET command to.
- * REDIS_CLUSTER_BLACKLIST_TTL 当前的值为 1 分钟，
- * 这意味着 redis-trib 有 60 秒的时间，可以向集群中的所有节点发送 CLUSTER FORGET
- * 命令，而不必担心有其他节点会将被 CLUSTER FORGET 移除的节点重新添加到集群里面。
+ * REDIS_CLUSTER_BLACKLIST_TTL 当前的值为 1 分钟， 这意味着 redis-trib 有 60 秒的时间，
+ * 可以向集群中的所有节点发送 CLUSTER FORGET命令，而不必担心有其他节点会将被 CLUSTER FORGET 移除的节点重新添加到集群里面。
  * The data structure used is a hash table with an sds string representing
  * the node ID as key, and the time when it is ok to re-add the node as
  * value.
- * 黑名单的底层实现是一个字典，
- * 字典的键为 SDS 表示的节点 id ，字典的值为可以重新添加节点的时间戳。
+ * 黑名单的底层实现是一个字典，字典的键为 SDS 表示的节点 id ，字典的值为可以重新添加节点的时间戳。
  * -------------------------------------------------------------------------- */
 
 #define REDIS_CLUSTER_BLACKLIST_TTL 60      /* 1 minute. */
-
 
 /* Before of the addNode() or Exists() operations we always remove expired
  * entries from the black list. This is an O(N) operation but it is not a
@@ -1127,7 +1123,7 @@ void clusterBlacklistCleanup(void) {
     dictIterator *di;
     dictEntry *de;
 
-    // 遍历黑名单中的所有节点。键是node*，值是过期时间
+    // 遍历黑名单中的所有节点。键是node*，值是可以重新添加字典的时间戳（也就是这个黑名单节点过期的时间戳）
     di = dictGetSafeIterator(server.cluster->nodes_black_list);
     while((de = dictNext(di)) != NULL) {
         int64_t expire = dictGetUnsignedIntegerVal(de); 
@@ -1210,7 +1206,6 @@ int clusterBlacklistExists(char *nodeid) {
  * 有一部分节点可能还是会不知道将 node 标记为 FAIL 。
  *
  * 不过：
- *
  * 1) Either we reach the majority and eventually the FAIL state will propagate
  *    to all the cluster.
  *    只要我们成功将 node 标记为 FAIL ，
@@ -1219,16 +1214,16 @@ int clusterBlacklistExists(char *nodeid) {
  *    FAIL flag will be cleared after some time.
  *    又或者，因为没有半数的节点支持，当前节点不能将 node 标记为 FAIL ，
  *    所以对 FAIL 节点的故障转移将无法进行， FAIL 标识可能会在之后被移除。
- *    
  */
+//看看是否需要将node标记为FAIL。evernote
 void markNodeAsFailingIfNeeded(clusterNode *node) {
     int failures;
 
     // 标记为 FAIL 所需的节点数量，需要超过集群节点数量的一半
     int needed_quorum = (server.cluster->size / 2) + 1;
 
-    if (!nodeTimedOut(node)) return; /* We can reach it. */
-    if (nodeFailed(node)) return; /* Already FAILing. */
+    if (!nodeTimedOut(node)) return; /* We can reach it. */ //如果当前节点没有认为node是PFAIL，直接返回
+    if (nodeFailed(node)) return; /* Already FAILing. *///如果当前节点认为node是下线状态了，直接返回
 
     // 统计将 node 标记为 PFAIL 或者 FAIL 的节点数量（不包括当前节点）
     failures = clusterNodeFailureReportsCount(node);
@@ -1244,8 +1239,8 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
 
     /* Mark the node as failing. */
     // 将 node 标记为 FAIL
-    node->flags &= ~REDIS_NODE_PFAIL;
-    node->flags |= REDIS_NODE_FAIL;
+    node->flags &= ~REDIS_NODE_PFAIL;//先移除PFAIL标记
+    node->flags |= REDIS_NODE_FAIL;//添加FAIL标记
     node->fail_time = mstime();
 
     /* Broadcast the failing node name to everybody, forcing all the other
@@ -1259,7 +1254,6 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
 /* This function is called only if a node is marked as FAIL, but we are able
  * to reach it again. It checks if there are the conditions to undo the FAIL
  * state. 
- *
  * 这个函数在当前节点接收到一个被标记为 FAIL 的节点那里收到消息时使用，
  * 它可以检查是否应该将节点的 FAIL 状态移除。
  */
@@ -1283,17 +1277,12 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
     }
 
     /* If it is a master and...
-     *
      * 如果 FAIL 的是一个主节点，并且：
-     *
      * 1) The FAIL state is old enough.
      *    节点被标记为 FAIL 状态已经有一段时间了
-     *
      * 2) It is yet serving slots from our point of view (not failed over).
      *    从当前节点的视角来看，这个节点还有负责处理的槽
-     *
      * Apparently no one is going to fix these slots, clear the FAIL flag. 
-     *
      * 那么说明 FAIL 节点仍然有槽没有迁移完，那么当前节点移除该节点的 FAIL 标识。
      */
     if (nodeIsMaster(node) && node->numslots > 0 &&
@@ -1306,7 +1295,6 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
 
         // 撤销 FAIL 状态
         node->flags &= ~REDIS_NODE_FAIL;
-
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE|CLUSTER_TODO_SAVE_CONFIG);
     }
 }
@@ -1314,10 +1302,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
 /* Return true if we already have a node in HANDSHAKE state matching the
  * specified ip address and port number. This function is used in order to
  * avoid adding a new handshake node for the same address multiple times. 
- *
- * 如果当前节点已经向 ip 和 port 所指定的节点进行了握手，
- * 那么返回 1 。
- *
+ * 如果当前节点已经向 ip 和 port 所指定的节点进行了握手， 那么返回 1 。
  * 这个函数用于防止对同一个节点进行多次握手。
  */
 int clusterHandshakeInProgress(char *ip, int port) {
@@ -1345,16 +1330,15 @@ int clusterHandshakeInProgress(char *ip, int port) {
  * already in progress. Returns non-zero if the handshake was actually
  * started. On error zero is returned and errno is set to one of the
  * following values:
- *
  * 如果还没有与指定的地址进行过握手，那么进行握手。
  * 返回 1 表示握手已经开始，
  * 返回 0 并将 errno 设置为以下值来表示意外情况：
- *
  * EAGAIN - There is already an handshake in progress for this address.
  *          已经有握手在进行中了。
  * EINVAL - IP or port are not valid. 
  *          ip 或者 port 参数不合法。
  */
+//创建一个节点并添加到集群中
 int clusterStartHandshake(char *ip, int port) {
     clusterNode *n;
     char norm_ip[REDIS_IP_STR_LEN];
@@ -1376,7 +1360,7 @@ int clusterStartHandshake(char *ip, int port) {
     }
 
     /* Port sanity check */
-    // port 合法性检查
+    // port 合法性检查，必须小于55535
     if (port <= 0 || port > (65535-REDIS_CLUSTER_PORT_INCR)) {
         errno = EINVAL;
         return 0;
@@ -1416,17 +1400,13 @@ int clusterStartHandshake(char *ip, int port) {
 }
 
 /* Process the gossip section of PING or PONG packets.
- *
  * 解释 MEET 、 PING 或 PONG 消息中和 gossip 协议有关的信息。
- *
  * Note that this function assumes that the packet is already sanity-checked
  * by the caller, not in the content of the gossip section, but in the
  * length. 
- *
  * 注意，这个函数假设调用者已经根据消息的长度，对消息进行过合法性检查。
  */
 void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
-
     // 记录这条消息中包含了多少个节点的信息
     uint16_t count = ntohs(hdr->count);
 
@@ -1488,7 +1468,6 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
 
                 // 节点处于正常状态
                 } else {
-
                     // 如果 sender 曾经发送过对 node 的下线报告
                     // 那么清除该报告
                     if (clusterNodeDelFailureReport(node,sender)) {
@@ -1524,7 +1503,6 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * Note that we require that the sender of this gossip message
              * is a well known node in our cluster, otherwise we risk
              * joining another cluster.
-             *
              * 注意，当前节点必须保证 sender 是本集群的节点，
              * 否则我们将有加入了另一个集群的风险。
              */
@@ -1550,22 +1528,15 @@ void nodeIp2String(char *buf, clusterLink *link) {
 
 /* Update the node address to the IP address that can be extracted
  * from link->fd, and at the specified port.
- *
  * 更新节点的地址， IP 和端口可以从 link->fd 获得。
- *
  * Also disconnect the node link so that we'll connect again to the new
  * address.
- *
  * 并且断开当前的节点连接，并根据新地址创建新连接。
- *
  * If the ip/port pair are already correct no operation is performed at
  * all.
- *
  * 如果 ip 和端口和现在的连接相同，那么不执行任何动作。
- *
  * The function returns 0 if the node address is still the same,
  * otherwise 1 is returned. 
- *
  * 函数返回 0 表示地址不变，地址已被更新则返回 1 。
  */
 int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, int port) {
@@ -1606,11 +1577,9 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, int port) {
 /* Reconfigure the specified node 'n' as a master. This function is called when
  * a node that we believed to be a slave is now acting as master in order to
  * update the state of the node. 
- *
  * 将节点 n 设置为主节点。
  */
 void clusterSetNodeAsMaster(clusterNode *n) {
-
     // 已经是主节点了。
     if (nodeIsMaster(n)) return;
 
@@ -1634,20 +1603,16 @@ void clusterSetNodeAsMaster(clusterNode *n) {
 /* This function is called when we receive a master configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
- *
  * 这个函数在节点通过 PING 、 PONG 、 UPDATE 消息接收到一个 master 的配置时调用，
  * 函数以一个节点，节点的 configEpoch ，
  * 以及节点在 configEpoch 纪元下的槽配置作为参数。
- *
  * What we do is to rebind the slots with newer configuration compared to our
  * local configuration, and if needed, we turn ourself into a replica of the
  * node (see the function comments for more info).
- *
  * 这个函数要做的就是在 slots 参数的新配置和本节点的当前配置进行对比，
  * 并更新本节点对槽的布局，
  * 如果有需要的话，函数还会将本节点转换为 sender 的从节点，
  * 更多信息请参考函数中的注释。
- *
  * The 'sender' is the node for which we received a configuration update.
  * Sometimes it is not actaully the "Sender" of the information, like in the case
  * we receive the info via an UPDATE packet. 
@@ -1837,21 +1802,17 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
  * at node->rcvbuf. Releasing the buffer is up to the caller, so this
  * function should just handle the higher level stuff of processing the
  * packet, modifying the cluster state if needed.
- *
  * 当这个函数被调用时，说明 node->rcvbuf 中有一条待处理的信息。
  * 信息处理完毕之后的释放工作由调用者处理，所以这个函数只需负责处理信息就可以了。
- *
  * The function returns 1 if the link is still valid after the packet
  * was processed, otherwise 0 if the link was freed since the packet
  * processing lead to some inconsistency error (for instance a PONG
  * received from the wrong sender ID). 
- *
  * 如果函数返回 1 ，那么说明处理信息时没有遇到问题，连接依然可用。
  * 如果函数返回 0 ，那么说明信息处理时遇到了不一致问题
  * （比如接收到的 PONG 是发送自不正确的发送者 ID 的），连接已经被释放。
  */
 int clusterProcessPacket(clusterLink *link) {
-
     // 指向消息头
     clusterMsg *hdr = (clusterMsg*) link->rcvbuf;
 
@@ -1876,9 +1837,9 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Perform sanity checks */
     // 合法性检查
-    if (totlen < 16) return 1; /* At least signature, version, totlen, count. */
+    if (totlen < 16) return 1; /* At least signature, version, totlen, count. *///小于16字节，数据还不够，直接返回
     if (ntohs(hdr->ver) != 0) return 1; /* Can't handle versions other than 0.*/
-    if (totlen > sdslen(link->rcvbuf)) return 1;
+    if (totlen > sdslen(link->rcvbuf)) return 1; //数据还没到齐，先返回
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG ||
         type == CLUSTERMSG_TYPE_MEET)
     {
@@ -2434,19 +2395,13 @@ int clusterProcessPacket(clusterLink *link) {
 }
 
 /* This function is called when we detect the link with this node is lost.
-
    这个函数在发现节点的连接已经丢失时使用。
-
    We set the node as no longer connected. The Cluster Cron will detect
    this connection and will try to get it connected again.
-
    我们将节点的状态设置为断开状态，Cluster Cron 会根据该状态尝试重新连接节点。
-
    Instead if the node is a temporary node used to accept a query, we
    completely free the node on error. 
-
    如果连接是一个临时连接的话，那么它就会被永久释放，不再进行重连。
-
    */
 void handleLinkIOError(clusterLink *link) {
     freeClusterLink(link);
@@ -2455,16 +2410,16 @@ void handleLinkIOError(clusterLink *link) {
 /* Send data. This is handled using a trivial send buffer that gets
  * consumed by write(). We don't try to optimize this for speed too much
  * as this is a very low traffic channel. 
- *
  * 写事件处理器，用于向集群节点发送信息。
  */
+//evernote
 void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     clusterLink *link = (clusterLink*) privdata;
     ssize_t nwritten;
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    // 写入信息
+    // 写入信息：将sndbuf数据写到fd
     nwritten = write(fd, link->sndbuf, sdslen(link->sndbuf));
 
     // 写入错误
@@ -2490,7 +2445,8 @@ void clusterWriteHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  * will call the function to process the packet. And so forth. */
 // 读事件处理器
 // 首先读入内容的头，以判断读入内容的长度
-// 如果内容是一个 whole packet ，那么调用函数来处理这个 packet 。
+// 如果内容是一个 whole packet ，那么调用函数来处理这个 packet 
+//evernote
 void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     char buf[sizeof(clusterMsg)];
     ssize_t nread;
@@ -2568,19 +2524,16 @@ void clusterReadHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 /* Put stuff into the send buffer.
- *
  * 发送信息
- *
  * It is guaranteed that this function will never have as a side effect
  * the link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with the same link later. 
- *
  * 因为发送不会对连接本身造成不良的副作用，
  * 所以可以在发送信息的处理器上做一些针对连接本身的动作。
  */
+//evernote
 void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
-
-    // 安装写事件处理器
+    // 安装写事件处理器,只有初始sndbuf是空的时候要安装写事件处理器
     if (sdslen(link->sndbuf) == 0 && msglen != 0)
         aeCreateFileEvent(server.el,link->fd,AE_WRITABLE,
                     clusterWriteHandler,link);
@@ -2594,12 +2547,11 @@ void clusterSendMessage(clusterLink *link, unsigned char *msg, size_t msglen) {
 
 /* Send a message to all the nodes that are part of the cluster having
  * a connected link.
- *
  * 向节点连接的所有其他节点发送信息。
- *
  * It is guaranteed that this function will never have as a side effect
  * some node->link to be invalidated, so it is safe to call this function
  * from event handlers that will do stuff with node links later. */
+//向节点连接的所有节点广播消息
 void clusterBroadcastMessage(void *buf, size_t len) {
     dictIterator *di;
     dictEntry *de;
@@ -2623,22 +2575,19 @@ void clusterBroadcastMessage(void *buf, size_t len) {
 }
 
 /* Build the message header */
-// 构建信息
+// 构建信息。evernote
 void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     int totlen = 0;
     uint64_t offset;
     clusterNode *master;
 
     /* If this node is a master, we send its slots bitmap and configEpoch.
-     *
      * 如果这是一个主节点，那么发送该节点的槽 bitmap 和配置纪元。
-     *
      * If this node is a slave we send the master's information instead (the
      * node is flagged as slave so the receiver knows that it is NOT really
      * in charge for this slots.
      * 如果这是一个从节点，
      * 那么发送这个节点的主节点的槽 bitmap 和配置纪元。
-     *
      * 因为接收信息的节点通过标识可以知道这个节点是一个从节点，
      * 所以接收信息的节点不会将从节点错认作是主节点。
      */
@@ -2659,7 +2608,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
     // 设置信息发送者
     memcpy(hdr->sender,myself->name,REDIS_CLUSTER_NAMELEN);
 
-    // 设置当前节点负责的槽
+    // 设置master节点负责的槽
     memcpy(hdr->myslots,master->slots,sizeof(hdr->myslots));
 
     // 清零 slaveof 域
